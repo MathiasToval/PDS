@@ -147,6 +147,16 @@ def expand_param(dicc_base, param_name, step, n=50, filename="config"):
 
 
 
-dicc_base = {"rt60" : 0.5, "mic_amount" : 4, "mic_start" : [1, 1, 1], "mic_dist" : 0.1, "source_pos" : [5, 5, 1], "fs" : 44100}
+
+
+dicc_base = {
+    "room_dim": [10, 10, 10], 
+    "rt60": 0.5,
+    "mic_amount": 4,
+    "mic_start": [1, 1, 1],
+    "mic_dist": 0.1,
+    "source_pos": [5, 5, 1],
+    "fs": 44100}
+    
 
 
