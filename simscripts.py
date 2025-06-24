@@ -146,7 +146,70 @@ def expand_param(dicc_base, param_name, step, n=50, filename="config"):
     return dicc_new
 
 
+def simulate_from_config(signal, config_file="config.json"):
+    """
+    Simulates a set of rooms based on a configuration JSON file and returns the mic signals for each.
 
+    Parameters
+    ----------
+    signal : np.ndarray
+        Audio signal to be used as the source.
+    config_file : str, optional
+        Path to the configuration JSON file. Default is "config.json".
+
+    Returns
+    -------
+    list of np.ndarray
+        List of simulated mic signals for each variation.
+    """
+    with open(config_file, "r") as f:
+        config = json.load(f)
+
+    # Detect which parameter was expanded (i.e., which one has multiple values)
+    expanded_param = None
+    for key, value in config.items():
+        if isinstance(value, list):
+            # Ignore 3D vector values (e.g., [x, y, z])
+            if len(value) > 0 and isinstance(value[0], (int, float)) and len(value) > 3:
+                expanded_param = key
+                break
+            elif len(value) > 0 and isinstance(value[0], list):  # list of vectors (e.g., source_pos variations)
+                expanded_param = key
+                break
+
+    if expanded_param is None:
+        raise ValueError("No expanded parameter found in config.")
+
+    # Determine number of variations
+    num_variations = len(config[expanded_param])
+
+    all_signals = []
+
+    for i in range(num_variations):
+        # Prepare configuration for current iteration
+        current_config = {
+            key: (value[i] if key == expanded_param else value)
+            for key, value in config.items()
+        }
+
+        mic_pos = mic_array(
+            current_config["mic_amount"],
+            current_config["mic_start"],
+            current_config["mic_dist"]
+        )
+
+        room = room_sim(
+            current_config["room_dim"],
+            current_config["rt60"],
+            mic_pos,
+            current_config["source_pos"],
+            signal,
+            current_config["fs"]
+        )
+
+        all_signals.append(room.mic_array.signals)
+
+    return all_signals
 
 
 dicc_base = {
