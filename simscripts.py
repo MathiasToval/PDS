@@ -8,6 +8,8 @@ Created on Sun Jun 22 20:32:28 2025
 
 import pyroomacoustics as pra
 import numpy as np
+import json
+import copy
 
 def mic_array(mic_amount, mic_start, mic_dist):
     """
@@ -78,5 +80,73 @@ def room_sim(room_dim, rt60, mic_pos, source_pos, signal, fs=44100):
 
     return room
 
+
+
+
+def expand_param(dicc_base, param_name, step, n=50, filename="config"):
+    """
+    Expands a scalar or 3D coordinate parameter in a base dictionary, generating 
+    a list of `n` values based on a specified step. Automatically saves the result as a JSON file.
+
+    Parameters
+    ----------
+    dicc_base : dict
+        Base dictionary with the original parameters.
+    param_name : str
+        Name of the parameter to expand.
+    step : float or list/tuple of 3 elements
+        Step size. Must be:
+            - Scalar if the original value is scalar.
+            - List or tuple of length 3 if the original value is a 3D coordinate.
+    n : int, optional
+        Number of values to generate. Default is 50.
+    filename : str, optional
+        Base name for the JSON file (without extension). Default is 'config'.
+
+    Returns
+    -------
+    dict
+        A copy of the dictionary with the expanded parameter.
+
+    Raises
+    ------
+    KeyError
+        If the parameter name does not exist in the dictionary.
+    ValueError
+        If step is not valid for the parameter type.
+    TypeError
+        If the parameter type is unsupported.
+    """
+    dicc_new = copy.deepcopy(dicc_base)
+
+    if param_name not in dicc_new:
+        raise KeyError(f"Parameter '{param_name}' not found in the dictionary.")
+
+    val = dicc_new[param_name]
+
+    # 3D coordinate case
+    if isinstance(val, (list, tuple)) and len(val) == 3:
+        if not (isinstance(step, (list, tuple)) and len(step) == 3):
+            raise ValueError("For 3D vector parameters, step must also be a list or tuple of length 3.")
+        dicc_new[param_name] = [
+            [val[i] + k * step[i] for i in range(3)] for k in range(n)
+        ]
+    # Scalar case
+    elif isinstance(val, (int, float)):
+        if not isinstance(step, (int, float)):
+            raise ValueError("For scalar parameters, step must be a number (int or float).")
+        dicc_new[param_name] = [val + k * step for k in range(n)]
+    else:
+        raise TypeError(f"Unsupported parameter type for '{param_name}': {type(val)}")
+
+    # Save dictionary to JSON file
+    with open(f"{filename}.json", 'w') as f:
+        json.dump(dicc_new, f, indent=4)
+
+    return dicc_new
+
+
+
+dicc_base = {"rt60" : 0.5, "mic_amount" : 4, "mic_start" : [1, 1, 1], "mic_dist" : 0.1, "source_pos" : [5, 5, 1], "fs" : 44100}
 
 
