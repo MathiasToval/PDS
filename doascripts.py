@@ -9,10 +9,15 @@ Created on Sun Jun 22 17:42:16 2025
 import numpy as np
 from scipy.signal import correlate
 from scipy.fft import fft, ifft
-import simscripts as sim
 import json
 import soundfile as sf
 import copy
+import sys
+import os
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+import simscripts as sim
+import generate as gen
+
 
 def estimate_tdoa(sig1, sig2, fs):
     corr = correlate(sig1, sig2, mode='full')
@@ -333,7 +338,7 @@ def full_doa_pipeline(json_path, signal, mic_pairs=None, method='classic', max_t
     if isinstance(signal, str):
         signal_data, fs_signal = sf.read(signal)
         if signal_data.ndim > 1:
-            signal_data = signal_data[:, 0]  # mono
+            signal_data = signal_data[:, 0]  # forzar mono
     else:
         signal_data = signal
         fs_signal = None
@@ -342,57 +347,101 @@ def full_doa_pipeline(json_path, signal, mic_pairs=None, method='classic', max_t
     with open(json_path, 'r') as f:
         config_data = json.load(f)
 
-    # Determinar parámetro variable
+    # Detectar parámetro variable
     if variable_param is not None:
         varied_param = variable_param
         if varied_param not in config_data:
-            raise ValueError(f"El parámetro '{varied_param}' no está en el JSON.")
+            raise ValueError(f"Parameter '{varied_param}' is not in the JSON file.")
+        # agarra e indexa la lista con n variaciones
         param_values = config_data[varied_param]
     else:
-        # Busco primer parámetro que sea lista no vacía
         varied_param = None
         for k, v in config_data.items():
-            if isinstance(v, list) and len(v) > 0:
+            if isinstance(v, list) and len(v) > 0 and isinstance(v[0], (int, float, list)):
                 varied_param = k
+                param_values = v
                 break
         if varied_param is None:
             raise ValueError("No varying parameter (non-empty list) found in JSON config.")
-        param_values = config_data[varied_param]
 
-    # Armar lista de configuraciones para iterar
+    # Crear lista de configuraciones
     config_list = []
+    
+    #por cada valor en la lista con variaciones, crea copia del dicc, 
     for val in param_values:
         cfg = copy.deepcopy(config_data)
+        #indexa la copia del diccionario con el parametro variado para obtener
+        #la lista con n variaciones y reemplaza la lista por
+        #el valor var que itera el ciclo.
         cfg[varied_param] = val
+        #ese nuevo diccionario lo agrega a la lista de simulaciones a hacer
         config_list.append(cfg)
 
     all_signals = []
     mic_positions_list = []
     fs_list = []
+    valid_param_values = []
 
+    # se itera sobre los n diccionarios en config list
     for cfg in config_list:
-        room_dim = cfg["room_dim"]
-        rt60 = cfg["rt60"]
-        mic_amount = cfg["mic_amount"]
-        mic_start = cfg["mic_start"]
-        mic_dist = cfg["mic_dist"]
-        source_pos = cfg["source_pos"]
-        fs = cfg["fs"]
+        try:
+            room_dim = cfg["room_dim"]
+            rt60 = cfg["rt60"]
+            mic_amount = cfg["mic_amount"]
+            mic_start = cfg["mic_start"]
+            mic_dist = cfg["mic_dist"]
+            source_pos = cfg["source_pos"]
+            fs = cfg["fs"]
 
-        # Forzar float/int si vienen listas de un solo elemento
-        if isinstance(rt60, list) and len(rt60) == 1:
-            rt60 = float(rt60[0])
-        if isinstance(fs, list) and len(fs) == 1:
-            fs = int(fs[0])
+            # Forzar valores escalares si vienen como listas unielemento
+            if isinstance(rt60, list) and len(rt60) == 1:
+                rt60 = float(rt60[0])
+            if isinstance(fs, list) and len(fs) == 1:
+                fs = int(fs[0])
 
-        mic_pos = sim.mic_array(mic_amount, mic_start, mic_dist)
-        room = sim.room_sim(room_dim, rt60, mic_pos, source_pos, signal_data, fs)
+            # Validar source_pos (si el parámetro variable es una coordenada 3D)
+            if not (isinstance(source_pos, list) and len(source_pos) == 3 and all(isinstance(coord, (int, float)) for coord in source_pos)):
+                print(f"Skipping invalid source_pos: {source_pos}")
+                continue
 
-        all_signals.append(room.mic_array.signals)
-        mic_positions_list.append(mic_pos)
-        fs_list.append(fs)
+            # Construir el recinto
+            mic_pos = sim.mic_array(mic_amount, mic_start, mic_dist)
+            room = sim.room_sim(room_dim, rt60, mic_pos, source_pos, signal_data, fs)
 
+            if room.mic_array.signals.shape[1] == 0:
+                print(f"Empty signals for source_pos={source_pos}, skipping.")
+                continue
+
+            # Guardar resultados válidos
+            all_signals.append(room.mic_array.signals)
+            mic_positions_list.append(mic_pos)
+            fs_list.append(fs)
+            valid_param_values.append(cfg[varied_param])
+
+        except Exception as e:
+            print(f"Error with config {cfg}: {e}")
+            continue
+
+    # Calcular TDOAs y DOAs
     all_tdoas = batch_gcc_tdoas(all_signals, fs_list, mic_pairs, method, max_tau)
     doa_results = batch_doas(all_tdoas, mic_positions_list, mic_pairs, c)
 
-    return param_values, doa_results, varied_param
+    return valid_param_values, doa_results, varied_param
+
+
+dicc_base = {
+    "room_dim": [10, 10, 10], 
+    "rt60": 0.5,
+    "mic_amount": 4,
+    "mic_start": [1, 1, 1],
+    "mic_dist": 0.1,
+    "source_pos": [5, 5, 1],
+    "fs": 44100}
+
+x, audio = gen.unit_impulse((0, 88200), 44100)
+
+
+sim.expand_param(dicc_base, "rt60", 0.05, filename = "x")
+sim.expand_param(dicc_base, "source_pos", [0.05,0,0], filename = "z")
+
+x,y,z = full_doa_pipeline("z.json",audio, variable_param="source_pos")
