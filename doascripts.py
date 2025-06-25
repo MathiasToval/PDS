@@ -270,7 +270,7 @@ def batch_gcc_tdoas(all_signals, fs_list, mic_pairs=None, method='classic', max_
     return all_tdoas
 
 
-def batch_doas(all_tdoas, mic_positions_list, mic_pairs=None, c=343, return_all=False):
+def batch_doas(all_tdoas, mic_positions_list, mic_pairs=None, c=343):
     """
     Computes DOA for each TDOA set and corresponding mic positions.
 
@@ -284,8 +284,6 @@ def batch_doas(all_tdoas, mic_positions_list, mic_pairs=None, c=343, return_all=
         Mic index pairs.
     c : float, optional
         Speed of sound.
-    return_all : bool, optional
-        Whether to return all DOAs or just the average.
 
     Returns
     -------
@@ -294,13 +292,13 @@ def batch_doas(all_tdoas, mic_positions_list, mic_pairs=None, c=343, return_all=
     """
     doas_results = []
     for tdoas, mic_pos in zip(all_tdoas, mic_positions_list):
-        doas_results = doa(tdoas, mic_pos, mic_pairs=mic_pairs, c=c, return_all=return_all)
+        doas_results = doa(tdoas, mic_pos, mic_pairs=mic_pairs, c=c, return_all=False)
         doas_results.append(doas_results)
     return doas_results
 
 
 
-def full_doa_pipeline(json_path, signal, mic_pairs=None, method='classic', max_tau=None, c=343, return_all=False):
+def full_doa_pipeline(json_path, signal, mic_pairs=None, method='classic', max_tau=None, c=343):
     """
     Load experiment configurations from a JSON file, simulate rooms, compute TDOAs and DOAs.
 
@@ -318,24 +316,36 @@ def full_doa_pipeline(json_path, signal, mic_pairs=None, method='classic', max_t
         Maximum expected TDOA in seconds.
     c : float, optional
         Speed of sound in m/s. Default is 343.
-    return_all : bool, optional
-        If True, return all DOA estimates for each room. Else, return average DOA.
 
     Returns
     -------
-    list
-        DOA estimates for each room (average or full depending on `return_all`)
+    tuple of (list, str, list)
+        - DOA estimates for each room.
+        - Name of the parameter that varied.
+        - List of the parameter values used (x-axis).
     """
-    # Load config list from JSON
+
     with open(json_path, 'r') as f:
         config_list = json.load(f)
+
+    # Detect the parameter that was varied
+    varied_param = None
+    param_values = {}
+    for key in config_list[0].keys():
+        values = [cfg[key] for cfg in config_list]
+        if len(set(map(str, values))) > 1:  # convert to str for list comparisons
+            varied_param = key
+            param_values = values
+            break
+
+    if varied_param is None:
+        raise ValueError("No varying parameter found in the JSON config.")
 
     all_signals = []
     mic_positions_list = []
     fs_list = []
 
     for cfg in config_list:
-        # Unpack variables
         room_dim = cfg["room_dim"]
         rt60 = cfg["rt60"]
         mic_amount = cfg["mic_amount"]
@@ -344,17 +354,14 @@ def full_doa_pipeline(json_path, signal, mic_pairs=None, method='classic', max_t
         source_pos = cfg["source_pos"]
         fs = cfg["fs"]
 
-        # Create mic array and simulate room
         mic_pos = sim.mic_array(mic_amount, mic_start, mic_dist)
         room = sim.room_sim(room_dim, rt60, mic_pos, source_pos, signal, fs)
 
-        # Store simulation outputs
         all_signals.append(room.mic_array.signals)
         mic_positions_list.append(mic_pos)
         fs_list.append(fs)
 
-    # Calculate TDOAs and DOAs
     all_tdoas = batch_gcc_tdoas(all_signals, fs_list, mic_pairs, method, max_tau)
-    doa_results = batch_doas(all_tdoas, mic_positions_list, mic_pairs, c, return_all)
+    doa_results = batch_doas(all_tdoas, mic_positions_list, mic_pairs, c)
 
-    return doa_results
+    return param_values, doa_results, varied_param
