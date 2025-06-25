@@ -146,7 +146,7 @@ def expand_param(dicc_base, param_name, step, n=50, filename="config"):
     return dicc_new
 
 
-def simulate_from_config(signal, config_file="config.json"):
+def simulate_from_config(signal, config_file):
     """
     Simulates a set of rooms based on a configuration JSON file and returns the mic signals for each.
 
@@ -154,12 +154,12 @@ def simulate_from_config(signal, config_file="config.json"):
     ----------
     signal : np.ndarray
         Audio signal to be used as the source.
-    config_file : str, optional
-        Path to the configuration JSON file. Default is "config.json".
+    config_file : str
+        Path to the configuration JSON file.
 
     Returns
     -------
-    list of np.ndarray
+    all_signals : list of np.ndarray
         List of simulated mic signals for each variation.
     """
     with open(config_file, "r") as f:
@@ -210,6 +210,7 @@ def simulate_from_config(signal, config_file="config.json"):
         all_signals.append(room.mic_array.signals)
 
     return all_signals
+
 
 
 dicc_base = {
