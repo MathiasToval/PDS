@@ -11,6 +11,8 @@ from scipy.signal import correlate
 from scipy.fft import fft, ifft
 import simscripts as sim
 import json
+import soundfile as sf
+import copy
 
 def estimate_tdoa(sig1, sig2, fs):
     corr = correlate(sig1, sig2, mode='full')
@@ -292,22 +294,22 @@ def batch_doas(all_tdoas, mic_positions_list, mic_pairs=None, c=343):
     """
     doas_results = []
     for tdoas, mic_pos in zip(all_tdoas, mic_positions_list):
-        doas_results = doa(tdoas, mic_pos, mic_pairs=mic_pairs, c=c, return_all=False)
-        doas_results.append(doas_results)
+        doa_value = doa(tdoas, mic_pos, mic_pairs=mic_pairs, c=c, return_all=False)
+        doas_results.append(doa_value)
     return doas_results
 
 
 
-def full_doa_pipeline(json_path, signal, mic_pairs=None, method='classic', max_tau=None, c=343):
+def full_doa_pipeline(json_path, signal, mic_pairs=None, method='classic', max_tau=None, c=343, variable_param=None):
     """
     Load experiment configurations from a JSON file, simulate rooms, compute TDOAs and DOAs.
 
     Parameters
     ----------
     json_path : str
-        Path to JSON file containing list of parameter dictionaries.
-    signal : np.ndarray
-        1D source signal to simulate in each room.
+        Path to JSON file containing parameters.
+    signal : str or np.ndarray
+        Path to .wav file or 1D source signal to simulate in each room.
     mic_pairs : list of tuple of int, optional
         Mic index pairs for TDOA/DOA computation.
     method : str, optional
@@ -316,30 +318,53 @@ def full_doa_pipeline(json_path, signal, mic_pairs=None, method='classic', max_t
         Maximum expected TDOA in seconds.
     c : float, optional
         Speed of sound in m/s. Default is 343.
+    variable_param : str, optional
+        Name of the parameter to vary (overrides auto-detection).
 
     Returns
     -------
-    tuple of (list, str, list)
+    tuple of (list, list, str)
+        - List of parameter values used (x-axis).
         - DOA estimates for each room.
         - Name of the parameter that varied.
-        - List of the parameter values used (x-axis).
     """
 
+    # Leer el audio si es un path
+    if isinstance(signal, str):
+        signal_data, fs_signal = sf.read(signal)
+        if signal_data.ndim > 1:
+            signal_data = signal_data[:, 0]  # mono
+    else:
+        signal_data = signal
+        fs_signal = None
+
+    # Leer JSON
     with open(json_path, 'r') as f:
-        config_list = json.load(f)
+        config_data = json.load(f)
 
-    # Detect the parameter that was varied
-    varied_param = None
-    param_values = {}
-    for key in config_list[0].keys():
-        values = [cfg[key] for cfg in config_list]
-        if len(set(map(str, values))) > 1:  # convert to str for list comparisons
-            varied_param = key
-            param_values = values
-            break
+    # Determinar parámetro variable
+    if variable_param is not None:
+        varied_param = variable_param
+        if varied_param not in config_data:
+            raise ValueError(f"El parámetro '{varied_param}' no está en el JSON.")
+        param_values = config_data[varied_param]
+    else:
+        # Busco primer parámetro que sea lista no vacía
+        varied_param = None
+        for k, v in config_data.items():
+            if isinstance(v, list) and len(v) > 0:
+                varied_param = k
+                break
+        if varied_param is None:
+            raise ValueError("No varying parameter (non-empty list) found in JSON config.")
+        param_values = config_data[varied_param]
 
-    if varied_param is None:
-        raise ValueError("No varying parameter found in the JSON config.")
+    # Armar lista de configuraciones para iterar
+    config_list = []
+    for val in param_values:
+        cfg = copy.deepcopy(config_data)
+        cfg[varied_param] = val
+        config_list.append(cfg)
 
     all_signals = []
     mic_positions_list = []
@@ -354,8 +379,14 @@ def full_doa_pipeline(json_path, signal, mic_pairs=None, method='classic', max_t
         source_pos = cfg["source_pos"]
         fs = cfg["fs"]
 
+        # Forzar float/int si vienen listas de un solo elemento
+        if isinstance(rt60, list) and len(rt60) == 1:
+            rt60 = float(rt60[0])
+        if isinstance(fs, list) and len(fs) == 1:
+            fs = int(fs[0])
+
         mic_pos = sim.mic_array(mic_amount, mic_start, mic_dist)
-        room = sim.room_sim(room_dim, rt60, mic_pos, source_pos, signal, fs)
+        room = sim.room_sim(room_dim, rt60, mic_pos, source_pos, signal_data, fs)
 
         all_signals.append(room.mic_array.signals)
         mic_positions_list.append(mic_pos)
