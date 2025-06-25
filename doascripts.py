@@ -300,7 +300,7 @@ def batch_doas(all_tdoas, mic_positions_list, mic_pairs=None, c=343, return_all=
 
 
 
-def full_doa_pipeline(json_path, signal, mic_pairs=None, method='phat', max_tau=None, c=343, return_all=False):
+def full_doa_pipeline(json_path, signal, mic_pairs=None, method='classic', max_tau=None, c=343, return_all=False):
     """
     Load experiment configurations from a JSON file, simulate rooms, compute TDOAs and DOAs.
 
@@ -313,7 +313,7 @@ def full_doa_pipeline(json_path, signal, mic_pairs=None, method='phat', max_tau=
     mic_pairs : list of tuple of int, optional
         Mic index pairs for TDOA/DOA computation.
     method : str, optional
-        GCC weighting method. Default is 'phat'.
+        GCC weighting method. Default is 'classic'.
     max_tau : float, optional
         Maximum expected TDOA in seconds.
     c : float, optional
