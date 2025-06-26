@@ -99,6 +99,36 @@ def gcc(sig1, sig2, fs, method='classic', norm=False):
 
     return t_lags, cc
 
+
+def true_doa(mic_pos, source_pos):
+    """
+    Computes the ground-truth Direction of Arrival (DOA) angle 
+    from the center of the microphone array to the source position.
+
+    Parameters
+    ----------
+    mic_pos : np.ndarray
+        Microphone positions as a 2D array of shape (3, N), 
+        where rows are [x, y, z] and N is the number of microphones.
+    source_pos : list or array-like
+        Source position as a list or array of [x, y, z].
+
+    Returns
+    -------
+    float
+        Ground-truth DOA angle in degrees, measured in the XY plane
+        from the positive x-axis towards the source direction.
+        Range: [0, 360).
+    """
+    mic_center = np.mean(mic_pos, axis=1)  # geometric center of array
+    src_vec = np.array(source_pos[:2]) - mic_center[:2]  # vector from center to source in XY
+
+    angle_rad = np.arctan2(src_vec[1], src_vec[0])  # atan2(y, x)
+    angle_deg = np.degrees(angle_rad) % 360
+
+    return angle_deg
+
+
 def gcc_tdoas(signals, fs, mic_pairs=None, method='classic', max_tau=None):
     """
     Estimate the time delays of arrival (TDOAs) between multiple pairs of signals 
@@ -192,6 +222,7 @@ def gcc_tdoas(signals, fs, mic_pairs=None, method='classic', max_tau=None):
 
     return tdoas
 
+
 def doa(tdoa, mic_positions, mic_pairs=None, c=343, return_all=False):
     """
     Calculates Direction of Arrival (DOA) angles from Time Differences of Arrival (TDOA) 
@@ -248,7 +279,8 @@ def doa(tdoa, mic_positions, mic_pairs=None, c=343, return_all=False):
 
     return doa_angles if return_all else round(doa_angles.mean(), 2)
 
-def batch_gcc_tdoas(all_signals, fs_list, mic_pairs=None, method='classic', max_tau=None):
+
+def batch_gcc_tdoas(all_signals, fs_list, mic_positions_list=None, mic_pairs=None, method='classic', max_tau=None, c=343):
     """
     Computes TDOAs for a list of simulations.
 
@@ -258,12 +290,16 @@ def batch_gcc_tdoas(all_signals, fs_list, mic_pairs=None, method='classic', max_
         List of (n_mics, n_samples) arrays, one per simulation.
     fs_list : list of int or float
         Sampling frequencies, one per simulation.
+    mic_positions_list : list of np.ndarray, optional
+        List of mic position arrays, needed to compute max_tau automatically if not given.
     mic_pairs : list of tuple of int, optional
         Microphone index pairs. If None, uses adjacent pairs.
     method : str, optional
         GCC method. Default is 'classic'.
     max_tau : float, optional
-        Maximum TDOA to consider (in seconds).
+        Maximum TDOA to consider (in seconds). If None, will be calculated from mic_positions_list.
+    c : float, optional
+        Speed of sound in m/s. Default is 343.
 
     Returns
     -------
@@ -271,8 +307,22 @@ def batch_gcc_tdoas(all_signals, fs_list, mic_pairs=None, method='classic', max_
         List of TDOAs per simulation.
     """
     all_tdoas = []
-    for signals, fs in zip(all_signals, fs_list):
-        tdoas = gcc_tdoas(signals, fs, mic_pairs=mic_pairs, method=method, max_tau=max_tau)
+    for idx, (signals, fs) in enumerate(zip(all_signals, fs_list)):
+        if max_tau is None:
+            if mic_positions_list is None:
+                raise ValueError("mic_positions_list is required to compute max_tau automatically")
+            mic_pos = mic_positions_list[idx]
+            if mic_pairs is None:
+                n_mics = mic_pos.shape[1]
+                mic_pairs_local = [(i, i + 1) for i in range(n_mics - 1)]
+            else:
+                mic_pairs_local = mic_pairs
+            max_dist = max(np.linalg.norm(mic_pos[:, i] - mic_pos[:, j]) for i, j in mic_pairs_local)
+            max_tau_sim = max_dist / c
+        else:
+            max_tau_sim = max_tau
+
+        tdoas = gcc_tdoas(signals, fs, mic_pairs=mic_pairs, method=method, max_tau=max_tau_sim)
         all_tdoas.append(tdoas)
     return all_tdoas
 
@@ -305,7 +355,7 @@ def batch_doas(all_tdoas, mic_positions_list, mic_pairs=None, c=343):
 
 
 
-def full_doa_pipeline(json_path, signal, mic_pairs=None, method='classic', max_tau=None, c=343, variable_param=None):
+def full_doa_pipeline(json_path, signal, mic_pairs=None, method='classic', max_tau=None, c=343, variable_param=None, return_error=True):
     """
     Load experiment configurations from a JSON file, simulate rooms, compute TDOAs and DOAs.
 
@@ -325,12 +375,14 @@ def full_doa_pipeline(json_path, signal, mic_pairs=None, method='classic', max_t
         Speed of sound in m/s. Default is 343.
     variable_param : str, optional
         Name of the parameter to vary (overrides auto-detection).
+    return_error : bool, optional
+        If True, returns the absolute error between estimated and true DOA. Default is False.
 
     Returns
     -------
     tuple of (list, list, str)
         - List of parameter values used (x-axis).
-        - DOA estimates for each room.
+        - DOA estimates or DOA absolute errors for each room.
         - Name of the parameter that varied.
     """
 
@@ -381,6 +433,7 @@ def full_doa_pipeline(json_path, signal, mic_pairs=None, method='classic', max_t
     mic_positions_list = []
     fs_list = []
     valid_param_values = []
+    ground_truth_angles = []
 
     # se itera sobre los n diccionarios en config list
     for cfg in config_list:
@@ -417,16 +470,51 @@ def full_doa_pipeline(json_path, signal, mic_pairs=None, method='classic', max_t
             mic_positions_list.append(mic_pos)
             fs_list.append(fs)
             valid_param_values.append(cfg[varied_param])
+            ground_truth_angles.append(true_doa(mic_pos, source_pos))
 
         except Exception as e:
             print(f"Error with config {cfg}: {e}")
             continue
 
-    # Calcular TDOAs y DOAs
-    all_tdoas = batch_gcc_tdoas(all_signals, fs_list, mic_pairs, method, max_tau)
+    # Calcular TDOAs y DOAs con cálculo automático de max_tau si no se pasa
+    all_tdoas = batch_gcc_tdoas(
+        all_signals,
+        fs_list,
+        mic_positions_list=mic_positions_list,
+        mic_pairs=mic_pairs,
+        method=method,
+        max_tau=max_tau,
+        c=c
+    )
     doa_results = batch_doas(all_tdoas, mic_positions_list, mic_pairs, c)
 
-    return valid_param_values, doa_results, varied_param
+    if return_error:
+        doa_errors = []
+        for est, real in zip(doa_results, ground_truth_angles):
+            # si el resultado es una lista de valores (por ejemplo varios DOAs por sim)
+            if isinstance(est, (list, np.ndarray)):
+                if len(est) > 0:
+                    error = abs(est[0] - real) % 360
+                    # corregir si el error es mayor a 180 (ángulo circular)
+                    if error > 180:
+                        error = 360 - error
+                    doa_errors.append(error)
+                else:
+                    doa_errors.append(np.nan)
+            # si es un único número
+            elif isinstance(est, (int, float)):
+                error = abs(est - real) % 360
+                if error > 180:
+                    error = 360 - error
+                doa_errors.append(error)
+            # si no se pudo calcular
+            else:
+                doa_errors.append(np.nan)
+        return valid_param_values, doa_errors, varied_param
+    else:
+        return valid_param_values, doa_results, varied_param
+
+
 
 
 dicc_base = {
@@ -442,6 +530,6 @@ x, audio = gen.unit_impulse((0, 88200), 44100)
 
 
 sim.expand_param(dicc_base, "rt60", 0.05, filename = "x")
-sim.expand_param(dicc_base, "source_pos", [0.05,0,0], filename = "z")
+sim.expand_param(dicc_base, "source_pos", [0.05,0,0], filename = "z", n=100)
 
 x,y,z = full_doa_pipeline("z.json",audio, variable_param="source_pos")
