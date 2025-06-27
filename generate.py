@@ -285,3 +285,27 @@ def ir(sr, t60, amp, amp_nf):
     arr_y = amp * exp * noise + amp_nf * noise
     return arr_x, arr_y
 
+def add_awgn(signals, snr_db):
+    """
+    Agrega ruido blanco gaussiano (AWGN) a cada señal del array de micrófonos.
+
+    Parameters
+    ----------
+    signals : np.ndarray
+        Señales del micrófono. Shape (n_mics, n_samples)
+    snr_db : float
+        Relación señal a ruido deseada en decibelios (dB)
+
+    Returns
+    -------
+    np.ndarray
+        Señales con ruido añadido.
+    """
+    noisy_signals = np.zeros_like(signals)
+    for i in range(signals.shape[0]):
+        signal_power = np.mean(signals[i] ** 2)
+        snr_linear = 10 ** (snr_db / 10)
+        noise_power = signal_power / snr_linear
+        noise = np.random.normal(0, np.sqrt(noise_power), size=signals.shape[1])
+        noisy_signals[i] = signals[i] + noise
+    return noisy_signals

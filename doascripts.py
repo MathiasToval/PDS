@@ -30,7 +30,7 @@ def corr_norm(sig1, sig2, fs):
     return lag, corr/np.abs(np.max(corr))
 
 
-def gcc(sig1, sig2, fs, method='classic', norm=False):
+def gcc(sig1, sig2, fs, method='classicfft', norm=False):
     """
     Compute the Generalized Cross-Correlation (GCC) function between two signals
     using a selected spectral weighting method.
@@ -44,7 +44,7 @@ def gcc(sig1, sig2, fs, method='classic', norm=False):
     fs : int or float
         Sampling frequency in Hz.
     method : str, optional
-        GCC weighting method. Options: 'phat', 'scot', 'roth', 'eckart', 'ml', 'classic'.
+        GCC weighting method. Options: 'phat', 'scot', 'roth', 'eckart', 'ml', 'classicfft' and 'classictemp'.
     norm : bool, optional
         Normalization of the CC results.
 
@@ -62,8 +62,9 @@ def gcc(sig1, sig2, fs, method='classic', norm=False):
     """
     n = len(sig1) + len(sig2) - 1
 
-    if method == 'classic':
+    if method == 'classictemp':
         cc = correlate(sig1, sig2, mode='full')
+        lags = np.arange(-len(sig2) + 1, len(sig1))
     else:
         SIG1 = fft(sig1, n=n)
         SIG2 = fft(sig2, n=n)
@@ -72,7 +73,9 @@ def gcc(sig1, sig2, fs, method='classic', norm=False):
         P1 = np.abs(SIG1) ** 2
         P2 = np.abs(SIG2) ** 2
 
-        if method == 'phat':
+        if method == 'classicfft':
+            W = 1.0
+        elif method == 'phat':
             W = 1 / (np.abs(G) + 1e-12)
         elif method == 'scot':
             W = 1 / (np.sqrt(P1 * P2) + 1e-12)
@@ -85,18 +88,16 @@ def gcc(sig1, sig2, fs, method='classic', norm=False):
             noise_power = np.mean(P2)
             W = np.abs(G) / (P2 + noise_power + 1e-12)
         else:
-            raise ValueError("Invalid method. Choose from 'phat', 'scot', 'roth', 'eckart', 'ml', or 'classic'.")
+            raise ValueError("Invalid method. Choose from 'classictemp', 'classicfft', 'phat', 'scot', 'roth', 'eckart', 'ml'.")
 
         G_weighted = G * W
         cc = np.real(ifft(G_weighted))
         cc = np.fft.fftshift(cc)
+        lags = np.arange(-(n // 2), (n + 1) // 2)
 
-    lags = np.arange(-(n // 2), (n + 1) // 2)
     t_lags = lags / fs
-    
     if norm:
-        cc = cc/np.max(np.abs(cc))
-
+        cc = cc / np.max(np.abs(cc))
     return t_lags, cc
 
 
@@ -129,7 +130,7 @@ def true_doa(mic_pos, source_pos):
     return angle_deg
 
 
-def gcc_tdoas(signals, fs, mic_pairs=None, method='classic', max_tau=None):
+def gcc_tdoas(signals, fs, mic_pairs=None, method='classicfft', max_tau=None):
     """
     Estimate the time delays of arrival (TDOAs) between multiple pairs of signals 
     using Generalized Cross Correlation (GCC) with various weighting methods.
@@ -160,7 +161,6 @@ def gcc_tdoas(signals, fs, mic_pairs=None, method='classic', max_tau=None):
     """
     n_mics, n_samples = signals.shape
 
-    # Si no se especifican pares, se usan pares consecutivos, no sobreescribe.
     if mic_pairs is None:
         mic_pairs = [(i, i+1) for i in range(n_mics - 1)]
 
@@ -169,20 +169,22 @@ def gcc_tdoas(signals, fs, mic_pairs=None, method='classic', max_tau=None):
     for i, j in mic_pairs:
         sig1 = signals[i]
         sig2 = signals[j]
+        n = len(sig1) + len(sig2) - 1
 
-        n = len(sig1) + len(sig2) - 1  # ajustar longitud total
-
-        if method == 'classic':
+        if method == 'classictemp':
             cc = correlate(sig1, sig2, mode='full')
+            lags = np.arange(-len(sig2) + 1, len(sig1))
         else:
             SIG1 = fft(sig1, n=n)
-            SIG2 = fft(sig2, n=n)  # zero padding para lograr que la convolución circular sea igual a la lineal
-            G = SIG1 * np.conj(SIG2)  # Espectro de la correlación cruzada
+            SIG2 = fft(sig2, n=n)
+            G = SIG1 * np.conj(SIG2)
 
             P1 = np.abs(SIG1) ** 2
             P2 = np.abs(SIG2) ** 2
 
-            if method == 'phat':
+            if method == 'classicfft':
+                W = 1.0
+            elif method == 'phat':
                 W = 1 / (np.abs(G) + 1e-12)
             elif method == 'scot':
                 W = 1 / (np.sqrt(P1 * P2) + 1e-12)
@@ -195,28 +197,20 @@ def gcc_tdoas(signals, fs, mic_pairs=None, method='classic', max_tau=None):
                 noise_power = np.mean(P2)
                 W = np.abs(G) / (P2 + noise_power + 1e-12)
             else:
-                raise ValueError("Invalid method. Choose from 'phat', 'scot', 'roth', 'eckart', 'ml', or 'classic'.")
+                raise ValueError("Invalid method. Choose from 'classictemp', 'classicfft', 'phat', 'scot', 'roth', 'eckart', 'ml'.")
 
             G_weighted = G * W
             cc = np.real(ifft(G_weighted))
             cc = np.fft.fftshift(cc)
-            # centra la corr alrededor del lag 0, ya que el orden de ese resultado 
-            # sigue siendo circular, en el sentido de cómo se almacenan los lags en el array.
+            lags = np.arange(len(cc)) - (len(cc) // 2)
 
-        # eje de lags como en correlate, se divide por dos ya que n es la long de la
-        # convolución y la mitad entera lo que se llama en la correlación común como
-        # len(sig2)-1
-        lags = np.arange(-(n // 2), (n + 1) // 2)
         t_lags = lags / fs
 
         if max_tau is not None:
-            # puede servir para ignorar los resultados por fuera del máximo retardo esperado
-            # el cual ocurre cuando cos = 1
             mask = np.abs(t_lags) <= max_tau
             cc = cc[mask]
             t_lags = t_lags[mask]
 
-        # este es el valor con convención correcta
         tdoa = t_lags[np.argmax(cc)]
         tdoas.append(tdoa)
 
@@ -280,7 +274,7 @@ def doa(tdoa, mic_positions, mic_pairs=None, c=343, return_all=False):
     return doa_angles if return_all else round(doa_angles.mean(), 2)
 
 
-def batch_gcc_tdoas(all_signals, fs_list, mic_positions_list=None, mic_pairs=None, method='classic', max_tau=None, c=343):
+def batch_gcc_tdoas(all_signals, fs_list, mic_positions_list=None, mic_pairs=None, method='classicfft', max_tau=None, c=343):
     """
     Computes TDOAs for a list of simulations.
 
@@ -355,42 +349,43 @@ def batch_doas(all_tdoas, mic_positions_list, mic_pairs=None, c=343):
 
 
 
-def full_doa_pipeline(json_path, signal, mic_pairs=None, method='classic', max_tau=None, c=343, variable_param=None, return_error=True):
+def full_doa_pipeline(json_path, signal, mic_pairs=None, method='classicfft', max_tau=None, c=343, variable_param=None, return_error=True, mic_noise_snr=None):
     """
-    Load experiment configurations from a JSON file, simulate rooms, compute TDOAs and DOAs.
+    Carga configuraciones, simula, calcula TDOAs y DOAs, con opción de agregar ruido a micrófonos.
 
     Parameters
     ----------
     json_path : str
-        Path to JSON file containing parameters.
-    signal : str or np.ndarray
-        Path to .wav file or 1D source signal to simulate in each room.
+        Ruta al archivo JSON con parámetros de simulación.
+    signal : str o np.ndarray
+        Señal fuente o ruta a archivo .wav.
     mic_pairs : list of tuple of int, optional
-        Mic index pairs for TDOA/DOA computation.
+        Pares de micrófonos para TDOA/DOA.
     method : str, optional
-        GCC weighting method. Default is 'classic'.
+        Método de GCC ('classic', 'phat', etc.).
     max_tau : float, optional
-        Maximum expected TDOA in seconds.
+        Máximo TDOA esperado.
     c : float, optional
-        Speed of sound in m/s. Default is 343.
+        Velocidad del sonido.
     variable_param : str, optional
-        Name of the parameter to vary (overrides auto-detection).
+        Nombre del parámetro que varía.
     return_error : bool, optional
-        If True, returns the absolute error between estimated and true DOA. Default is False.
+        Si True, devuelve error absoluto con DOA real.
+    mic_noise_snr : float, optional
+        Si se especifica, agrega ruido blanco gaussiano a los micrófonos con esa SNR en dB.
 
     Returns
     -------
     tuple of (list, list, str)
-        - List of parameter values used (x-axis).
-        - DOA estimates or DOA absolute errors for each room.
-        - Name of the parameter that varied.
+        - Valores del parámetro que varió (x-axis).
+        - DOAs estimados o errores.
+        - Nombre del parámetro variado.
     """
-
-    # Leer el audio si es un path
+    # Leer señal
     if isinstance(signal, str):
         signal_data, fs_signal = sf.read(signal)
         if signal_data.ndim > 1:
-            signal_data = signal_data[:, 0]  # forzar mono
+            signal_data = signal_data[:, 0]
     else:
         signal_data = signal
         fs_signal = None
@@ -403,8 +398,7 @@ def full_doa_pipeline(json_path, signal, mic_pairs=None, method='classic', max_t
     if variable_param is not None:
         varied_param = variable_param
         if varied_param not in config_data:
-            raise ValueError(f"Parameter '{varied_param}' is not in the JSON file.")
-        # agarra e indexa la lista con n variaciones
+            raise ValueError(f"'{varied_param}' no está en el JSON.")
         param_values = config_data[varied_param]
     else:
         varied_param = None
@@ -414,19 +408,12 @@ def full_doa_pipeline(json_path, signal, mic_pairs=None, method='classic', max_t
                 param_values = v
                 break
         if varied_param is None:
-            raise ValueError("No varying parameter (non-empty list) found in JSON config.")
+            raise ValueError("No se encontró parámetro variable.")
 
-    # Crear lista de configuraciones
     config_list = []
-    
-    #por cada valor en la lista con variaciones, crea copia del dicc, 
     for val in param_values:
         cfg = copy.deepcopy(config_data)
-        #indexa la copia del diccionario con el parametro variado para obtener
-        #la lista con n variaciones y reemplaza la lista por
-        #el valor var que itera el ciclo.
         cfg[varied_param] = val
-        #ese nuevo diccionario lo agrega a la lista de simulaciones a hacer
         config_list.append(cfg)
 
     all_signals = []
@@ -435,7 +422,6 @@ def full_doa_pipeline(json_path, signal, mic_pairs=None, method='classic', max_t
     valid_param_values = []
     ground_truth_angles = []
 
-    # se itera sobre los n diccionarios en config list
     for cfg in config_list:
         try:
             room_dim = cfg["room_dim"]
@@ -446,18 +432,13 @@ def full_doa_pipeline(json_path, signal, mic_pairs=None, method='classic', max_t
             source_pos = cfg["source_pos"]
             fs = cfg["fs"]
 
-            # Forzar valores escalares si vienen como listas unielemento
-            if isinstance(rt60, list) and len(rt60) == 1:
-                rt60 = float(rt60[0])
-            if isinstance(fs, list) and len(fs) == 1:
-                fs = int(fs[0])
+            if isinstance(rt60, list): rt60 = float(rt60[0])
+            if isinstance(fs, list): fs = int(fs[0])
 
-            # Validar source_pos (si el parámetro variable es una coordenada 3D)
-            if not (isinstance(source_pos, list) and len(source_pos) == 3 and all(isinstance(coord, (int, float)) for coord in source_pos)):
+            if not (isinstance(source_pos, list) and len(source_pos) == 3):
                 print(f"Skipping invalid source_pos: {source_pos}")
                 continue
 
-            # Construir el recinto
             mic_pos = sim.mic_array(mic_amount, mic_start, mic_dist)
             room = sim.room_sim(room_dim, rt60, mic_pos, source_pos, signal_data, fs)
 
@@ -465,8 +446,13 @@ def full_doa_pipeline(json_path, signal, mic_pairs=None, method='classic', max_t
                 print(f"Empty signals for source_pos={source_pos}, skipping.")
                 continue
 
-            # Guardar resultados válidos
-            all_signals.append(room.mic_array.signals)
+            signals = room.mic_array.signals
+
+            # 🎯 Si hay SNR definido, agregá ruido
+            if mic_noise_snr is not None:
+                signals = gen.add_awgn(signals, mic_noise_snr)
+
+            all_signals.append(signals)
             mic_positions_list.append(mic_pos)
             fs_list.append(fs)
             valid_param_values.append(cfg[varied_param])
@@ -476,10 +462,8 @@ def full_doa_pipeline(json_path, signal, mic_pairs=None, method='classic', max_t
             print(f"Error with config {cfg}: {e}")
             continue
 
-    # Calcular TDOAs y DOAs con cálculo automático de max_tau si no se pasa
     all_tdoas = batch_gcc_tdoas(
-        all_signals,
-        fs_list,
+        all_signals, fs_list,
         mic_positions_list=mic_positions_list,
         mic_pairs=mic_pairs,
         method=method,
@@ -491,23 +475,14 @@ def full_doa_pipeline(json_path, signal, mic_pairs=None, method='classic', max_t
     if return_error:
         doa_errors = []
         for est, real in zip(doa_results, ground_truth_angles):
-            # si el resultado es una lista de valores (por ejemplo varios DOAs por sim)
-            if isinstance(est, (list, np.ndarray)):
-                if len(est) > 0:
-                    error = abs(est[0] - real) % 360
-                    # corregir si el error es mayor a 180 (ángulo circular)
-                    if error > 180:
-                        error = 360 - error
-                    doa_errors.append(error)
-                else:
-                    doa_errors.append(np.nan)
-            # si es un único número
+            if isinstance(est, (list, np.ndarray)) and len(est) > 0:
+                error = abs(est[0] - real) % 360
+                if error > 180: error = 360 - error
+                doa_errors.append(error)
             elif isinstance(est, (int, float)):
                 error = abs(est - real) % 360
-                if error > 180:
-                    error = 360 - error
+                if error > 180: error = 360 - error
                 doa_errors.append(error)
-            # si no se pudo calcular
             else:
                 doa_errors.append(np.nan)
         return valid_param_values, doa_errors, varied_param
@@ -532,4 +507,3 @@ x, audio = gen.unit_impulse((0, 88200), 44100)
 sim.expand_param(dicc_base, "rt60", 0.05, filename = "x")
 sim.expand_param(dicc_base, "source_pos", [0.05,0,0], filename = "z", n=100)
 
-x,y,z = full_doa_pipeline("z.json",audio, variable_param="source_pos")
