@@ -381,11 +381,11 @@ def full_doa_pipeline(json_path, signal, mic_pairs=None, method='classicfft', ma
         - DOAs estimados o errores.
         - Nombre del parámetro variado.
     """
-    # Leer señal
+    # Leer el audio si es un path
     if isinstance(signal, str):
         signal_data, fs_signal = sf.read(signal)
         if signal_data.ndim > 1:
-            signal_data = signal_data[:, 0]
+            signal_data = signal_data[:, 0]  # forzar mono
     else:
         signal_data = signal
         fs_signal = None
@@ -399,6 +399,7 @@ def full_doa_pipeline(json_path, signal, mic_pairs=None, method='classicfft', ma
         varied_param = variable_param
         if varied_param not in config_data:
             raise ValueError(f"'{varied_param}' no está en el JSON.")
+    # agarra e indexa la lista con n variaciones
         param_values = config_data[varied_param]
     else:
         varied_param = None
@@ -410,10 +411,17 @@ def full_doa_pipeline(json_path, signal, mic_pairs=None, method='classicfft', ma
         if varied_param is None:
             raise ValueError("No se encontró parámetro variable.")
 
+    # Crear lista de configuraciones
     config_list = []
+
+    #por cada valor en la lista con variaciones, crea copia del dicc,
     for val in param_values:
         cfg = copy.deepcopy(config_data)
+        #indexa la copia del diccionario con el parametro variado para obtener
+        #la lista con n variaciones y reemplaza la lista por
+        #el valor var que itera el ciclo.
         cfg[varied_param] = val
+        #ese nuevo diccionario lo agrega a la lista de simulaciones a hacer
         config_list.append(cfg)
 
     all_signals = []
@@ -422,6 +430,7 @@ def full_doa_pipeline(json_path, signal, mic_pairs=None, method='classicfft', ma
     valid_param_values = []
     ground_truth_angles = []
 
+    # se itera sobre los n diccionarios en config list
     for cfg in config_list:
         try:
             room_dim = cfg["room_dim"]
@@ -432,13 +441,16 @@ def full_doa_pipeline(json_path, signal, mic_pairs=None, method='classicfft', ma
             source_pos = cfg["source_pos"]
             fs = cfg["fs"]
 
+            # se itera sobre los n diccionarios en config list
             if isinstance(rt60, list): rt60 = float(rt60[0])
             if isinstance(fs, list): fs = int(fs[0])
 
+            # Validar source_pos (si el parámetro variable es una coordenada 3D)
             if not (isinstance(source_pos, list) and len(source_pos) == 3):
                 print(f"Skipping invalid source_pos: {source_pos}")
                 continue
 
+            # Construir el recinto# Construir el recinto
             mic_pos = sim.mic_array(mic_amount, mic_start, mic_dist)
             room = sim.room_sim(room_dim, rt60, mic_pos, source_pos, signal_data, fs)
 
@@ -452,6 +464,7 @@ def full_doa_pipeline(json_path, signal, mic_pairs=None, method='classicfft', ma
             if mic_noise_snr is not None:
                 signals = gen.add_awgn(signals, mic_noise_snr)
 
+            # Guardar resultados válidos
             all_signals.append(signals)
             mic_positions_list.append(mic_pos)
             fs_list.append(fs)
@@ -462,6 +475,7 @@ def full_doa_pipeline(json_path, signal, mic_pairs=None, method='classicfft', ma
             print(f"Error with config {cfg}: {e}")
             continue
 
+    # Calcular TDOAs y DOAs con cálculo automático de max_tau si no se pasa
     all_tdoas = batch_gcc_tdoas(
         all_signals, fs_list,
         mic_positions_list=mic_positions_list,
@@ -475,14 +489,17 @@ def full_doa_pipeline(json_path, signal, mic_pairs=None, method='classicfft', ma
     if return_error:
         doa_errors = []
         for est, real in zip(doa_results, ground_truth_angles):
+            # si el resultado es una lista de valores (por ejemplo varios DOAs por sim)
             if isinstance(est, (list, np.ndarray)) and len(est) > 0:
                 error = abs(est[0] - real) % 360
+                # corregir si el error es mayor a 180 (ángulo circular)
                 if error > 180: error = 360 - error
                 doa_errors.append(error)
             elif isinstance(est, (int, float)):
                 error = abs(est - real) % 360
                 if error > 180: error = 360 - error
                 doa_errors.append(error)
+                # si es un único número
             else:
                 doa_errors.append(np.nan)
         return valid_param_values, doa_errors, varied_param
