@@ -23,10 +23,15 @@ def plot_signals(*signals, xlabel="", ylabel="", xlim=None, ylim=None, xlogscale
     *signals : tuple
         Accepts tuples containing signals to plot, and where to do so. 
         Each signal should be a tuple consisting of seven elements: 
-        two arrays representing the x-axis and y-axis data respectively, 
-        an integer starting from 1, which indicates the graph number where the 
-        signal is going to be plotted on, the plot title, the plot color, a label, and lastly, 
-        a list which corresponds of y-axis errors, with length the same as the y-axis array.
+            
+        - two arrays representing the x-axis and y-axis data respectively, 
+        - an integer starting from 1, which indicates the graph number where the 
+        signal is going to be plotted on
+        - the plot title
+        - the plot color
+        - a label
+        - a list which corresponds of y-axis errors, with length the same as the y-axis array.
+        
         If only one plot is desired, number 1 must still be input in tuple. If no
         plot title is desired, "" must be entered. If no specific color is 
         desired, None must be entered. If no label is desired, None must be input. 

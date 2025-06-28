@@ -63,7 +63,7 @@ def gcc(sig1, sig2, fs, method='classicfft', norm=False):
     n = len(sig1) + len(sig2) - 1
 
     if method == 'classictemp':
-        cc = correlate(sig1, sig2, mode='full')
+        cc = correlate(sig1, sig2, mode='full', method="direct")
         lags = np.arange(-len(sig2) + 1, len(sig1))
     else:
         SIG1 = fft(sig1, n=n)
@@ -172,7 +172,7 @@ def gcc_tdoas(signals, fs, mic_pairs=None, method='classicfft', max_tau=None):
         n = len(sig1) + len(sig2) - 1
 
         if method == 'classictemp':
-            cc = correlate(sig1, sig2, mode='full')
+            cc = correlate(sig1, sig2, mode='full', method="direct")
             lags = np.arange(-len(sig2) + 1, len(sig1))
         else:
             SIG1 = fft(sig1, n=n)
@@ -502,12 +502,12 @@ def full_doa_pipeline(json_path, signal, mic_pairs=None, method='classicfft', ma
                 # si es un único número
             else:
                 doa_errors.append(np.nan)
-        return valid_param_values, doa_errors, varied_param
+        return valid_param_values, doa_errors
     else:
-        return valid_param_values, doa_results, varied_param
+        return valid_param_values, doa_results
 
 
-
+"""
 
 dicc_base = {
     "room_dim": [10, 10, 10], 
@@ -523,4 +523,4 @@ x, audio = gen.unit_impulse((0, 88200), 44100)
 
 sim.expand_param(dicc_base, "rt60", 0.05, filename = "x")
 sim.expand_param(dicc_base, "source_pos", [0.05,0,0], filename = "z", n=100)
-
+"""
