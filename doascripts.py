@@ -450,7 +450,7 @@ def full_doa_pipeline(json_path, signal, method='classicfft', max_tau=None, c=34
     mic_positions_list = []
     fs_list = []
     valid_param_values = []
-    #ground_truth_angles = []
+    ground_truth_angles = []
 
     # se itera sobre los n diccionarios en config list
     for cfg in config_list:
@@ -505,7 +505,7 @@ def full_doa_pipeline(json_path, signal, method='classicfft', max_tau=None, c=34
             mic_positions_list.append(mic_pos)
             fs_list.append(fs)
             valid_param_values.append(cfg[varied_param])
-
+            ground_truth_angles.append(true_doa(mic_pos, source_pos))  # ← ESTE
 
         except Exception as e:
             print(f"Error with config {cfg}: {e}")
@@ -528,7 +528,10 @@ def full_doa_pipeline(json_path, signal, method='classicfft', max_tau=None, c=34
     doa_results = batch_doas(all_tdoas, mic_positions_list, mic_pairs, c)
 
     if return_error:
-        doa_errors = [abs(est - true_angle) for est in doa_results]
+        doa_errors = []
+        for est, real in zip(doa_results, ground_truth_angles):
+            error = abs(est - real)
+            doa_errors.append(error)
         return valid_param_values, doa_errors
     else:
         return valid_param_values, doa_results
@@ -581,7 +584,7 @@ def batch_mean_std(x_data, y_data, batch_size):
 #x, audio = gen.unit_impulse((0, 88200), 44100)
 
 
-#x, y = full_doa_pipeline("variacion_mic_amount.json", audio, variable_param="mic_amount", method="classicfft")
+#x, y = full_doa_pipeline("variacion_mic_pos.json", audio, variable_param="mic_start", method="classicfft")
 
 
 
