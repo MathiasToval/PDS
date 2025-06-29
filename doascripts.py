@@ -388,7 +388,7 @@ def full_doa_pipeline(json_path, signal, mic_pairs=None, method='classicfft', ma
             signal_data = signal_data[:, 0]  # forzar mono
     else:
         signal_data = signal
-        fs_signal = None
+        #fs_signal = None
 
     # Leer JSON
     with open(json_path, 'r') as f:
@@ -518,9 +518,26 @@ dicc_base = {
     "source_pos": [5, 5, 1],
     "fs": 44100}
 
-x, audio = gen.unit_impulse((0, 88200), 44100)
 
 
 sim.expand_param(dicc_base, "rt60", 0.05, filename = "x")
 sim.expand_param(dicc_base, "source_pos", [0.05,0,0], filename = "z", n=100)
+"""
+
+"""
+dicc_base = {
+    "room_dim": [5, 5, 5], 
+    "rt60": 0.5,
+    "mic_amount": 4,
+    "mic_start": [0, 0, 2.5],
+    "mic_dist": 0.1,
+    "source_pos": [2.5, 2.5, 2.5],
+    "fs": 48000}
+
+
+sim.expand_param(dicc_base, "rt60", 0.05, filename = "x")
+
+x, audio = gen.unit_impulse((0, 88200), 44100)
+
+full_doa_pipeline(dicc_base, audio)
 """
