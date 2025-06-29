@@ -349,37 +349,35 @@ def batch_doas(all_tdoas, mic_positions_list, mic_pairs=None, c=343):
 
 
 
-def full_doa_pipeline(json_path, signal, mic_pairs=None, method='classicfft', max_tau=None, c=343, variable_param=None, return_error=True, mic_noise_snr=None):
+def full_doa_pipeline(json_path, signal, mic_pairs=None, method='classicfft', max_tau=None, c=343, variable_param=None, return_error=True):
     """
-    Carga configuraciones, simula, calcula TDOAs y DOAs, con opción de agregar ruido a micrófonos.
+    Loads configurations, simulates, calculates TDOAs and DOAs, with microphone noise optionally included from JSON.
 
     Parameters
     ----------
     json_path : str
-        Ruta al archivo JSON con parámetros de simulación.
-    signal : str o np.ndarray
-        Señal fuente o ruta a archivo .wav.
+        Path to the JSON file containing simulation parameters.
+    signal : str or np.ndarray
+        Source signal or path to .wav file.
     mic_pairs : list of tuple of int, optional
-        Pares de micrófonos para TDOA/DOA.
+        Microphone pairs for TDOA/DOA.
     method : str, optional
-        Método de GCC ('classic', 'phat', etc.).
+        GCC method ('classic', 'phat', etc.).
     max_tau : float, optional
-        Máximo TDOA esperado.
+        Maximum expected TDOA.
     c : float, optional
-        Velocidad del sonido.
+        Speed of sound.
     variable_param : str, optional
-        Nombre del parámetro que varía.
+        Name of the parameter being varied.
     return_error : bool, optional
-        Si True, devuelve error absoluto con DOA real.
-    mic_noise_snr : float, optional
-        Si se especifica, agrega ruido blanco gaussiano a los micrófonos con esa SNR en dB.
+        If True, returns absolute error compared to ground truth DOA.
 
     Returns
     -------
     tuple of (list, list, str)
-        - Valores del parámetro que varió (x-axis).
-        - DOAs estimados o errores.
-        - Nombre del parámetro variado.
+        - Values of the varied parameter (x-axis).
+        - Estimated DOAs or errors.
+        - Name of the varied parameter.
     """
     # Leer el audio si es un path
     if isinstance(signal, str):
@@ -399,7 +397,6 @@ def full_doa_pipeline(json_path, signal, mic_pairs=None, method='classicfft', ma
         varied_param = variable_param
         if varied_param not in config_data:
             raise ValueError(f"'{varied_param}' no está en el JSON.")
-    # agarra e indexa la lista con n variaciones
         param_values = config_data[varied_param]
     else:
         varied_param = None
@@ -414,14 +411,14 @@ def full_doa_pipeline(json_path, signal, mic_pairs=None, method='classicfft', ma
     # Crear lista de configuraciones
     config_list = []
 
-    #por cada valor en la lista con variaciones, crea copia del dicc,
+    # por cada valor en la lista con variaciones, crea copia del dicc,
     for val in param_values:
         cfg = copy.deepcopy(config_data)
-        #indexa la copia del diccionario con el parametro variado para obtener
-        #la lista con n variaciones y reemplaza la lista por
-        #el valor var que itera el ciclo.
+        # indexa la copia del diccionario con el parametro variado para obtener
+        # la lista con n variaciones y reemplaza la lista por
+        # el valor var que itera el ciclo.
         cfg[varied_param] = val
-        #ese nuevo diccionario lo agrega a la lista de simulaciones a hacer
+        # ese nuevo diccionario lo agrega a la lista de simulaciones a hacer
         config_list.append(cfg)
 
     all_signals = []
@@ -434,25 +431,40 @@ def full_doa_pipeline(json_path, signal, mic_pairs=None, method='classicfft', ma
     for cfg in config_list:
         try:
             room_dim = cfg["room_dim"]
-            rt60 = cfg["rt60"]
-            mic_amount = cfg["mic_amount"]
+            rt60 = float(cfg["rt60"]) if isinstance(cfg["rt60"], list) else float(cfg["rt60"])
+            mic_amount = int(cfg["mic_amount"])  # 🔴 fuerza entero
             mic_start = cfg["mic_start"]
             mic_dist = cfg["mic_dist"]
             source_pos = cfg["source_pos"]
-            fs = cfg["fs"]
+            fs = int(cfg["fs"]) if isinstance(cfg["fs"], list) else int(cfg["fs"])
+            snr = cfg["snr"]
 
-            # se itera sobre los n diccionarios en config list
-            if isinstance(rt60, list): rt60 = float(rt60[0])
-            if isinstance(fs, list): fs = int(fs[0])
+            # Validar cantidad mínima de micrófonos
+            if mic_amount < 2:
+                print(f"Skipping config with insufficient microphones: mic_amount={mic_amount}")
+                continue
 
             # Validar source_pos (si el parámetro variable es una coordenada 3D)
             if not (isinstance(source_pos, list) and len(source_pos) == 3):
                 print(f"Skipping invalid source_pos: {source_pos}")
                 continue
 
-            # Construir el recinto# Construir el recinto
+            # Validar que la fuente esté dentro del recinto
+            if not all(0 <= source_pos[i] <= room_dim[i] for i in range(3)):
+                print(f"Source position out of bounds: {source_pos}")
+                continue
+
             mic_pos = sim.mic_array(mic_amount, mic_start, mic_dist)
             room = sim.room_sim(room_dim, rt60, mic_pos, source_pos, signal_data, fs)
+
+            # Validar que los micrófonos estén dentro del recinto
+            if np.any(mic_pos[0] < 0) or np.any(mic_pos[0] > room_dim[0]) or \
+               np.any(mic_pos[1] < 0) or np.any(mic_pos[1] > room_dim[1]) or \
+               np.any(mic_pos[2] < 0) or np.any(mic_pos[2] > room_dim[2]):
+                print(f"Mic positions out of room bounds. Skipping configuration.")
+                continue
+            # Construir el recinto
+            
 
             if room.mic_array.signals.shape[1] == 0:
                 print(f"Empty signals for source_pos={source_pos}, skipping.")
@@ -460,9 +472,8 @@ def full_doa_pipeline(json_path, signal, mic_pairs=None, method='classicfft', ma
 
             signals = room.mic_array.signals
 
-            # 🎯 Si hay SNR definido, agregá ruido
-            if mic_noise_snr is not None:
-                signals = gen.add_awgn(signals, mic_noise_snr)
+            # Agrega ruido con el SNR especificado
+            signals = gen.add_awgn(signals, snr)
 
             # Guardar resultados válidos
             all_signals.append(signals)
@@ -492,19 +503,18 @@ def full_doa_pipeline(json_path, signal, mic_pairs=None, method='classicfft', ma
             # si el resultado es una lista de valores (por ejemplo varios DOAs por sim)
             if isinstance(est, (list, np.ndarray)) and len(est) > 0:
                 error = abs(est[0] - real) % 360
-                # corregir si el error es mayor a 180 (ángulo circular)
                 if error > 180: error = 360 - error
                 doa_errors.append(error)
             elif isinstance(est, (int, float)):
                 error = abs(est - real) % 360
                 if error > 180: error = 360 - error
                 doa_errors.append(error)
-                # si es un único número
             else:
                 doa_errors.append(np.nan)
         return valid_param_values, doa_errors
     else:
         return valid_param_values, doa_results
+
 
 
 

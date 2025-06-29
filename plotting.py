@@ -10,6 +10,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.ticker as plticker
 import soundfile as sf
+import doascripts as doa
 from mpl_toolkits.axes_grid1.inset_locator import inset_axes, mark_inset
 
 
@@ -308,3 +309,48 @@ def plot_room_top_view(room_dim, mic_positions, source_position, zoom=True, zoom
     ax.set_ylabel('Y (m)')
     ax.legend()
     plt.show()
+
+    import numpy as np
+import matplotlib.pyplot as plt
+
+
+
+def plot_error_vs_param(json_path, signal_path, variable_param):
+    plt.figure(figsize=(10,6))
+
+    methods = [
+        "classicfft",
+        "phat",
+        "scot",
+        "roth",
+        "ml"
+]
+
+    for method in methods:
+        print(f"Running method: {method}")
+        param_vals, error_vals = doa.full_doa_pipeline(
+            json_path,
+            signal_path,
+            method=method,
+            variable_param=variable_param,
+            return_error=True
+        )
+        # En caso que error_vals sea lista de listas, hago media
+        if isinstance(error_vals[0], (list, np.ndarray)):
+            mean_errors = [np.mean(e) for e in error_vals]
+        else:
+            mean_errors = error_vals
+
+        
+    
+        plt.plot(param_vals, mean_errors, marker='o', label=method)
+
+    plt.xlabel(variable_param)
+    plt.ylabel("Mean Absolute DOA Error (°)")
+    plt.title(f"DOA Error vs {variable_param} for different GCC methods")
+    plt.grid(True)
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig("Barras RT60.png", dpi=300, bbox_inches='tight')
+    plt.show()
+
