@@ -376,7 +376,7 @@ def batch_doas(all_tdoas, mic_positions_list, mic_pairs=None, c=343):
 
 
 
-def full_doa_pipeline(json_path, signal, mic_pairs=None, method='classicfft', max_tau=None, c=343, variable_param=None, return_error=True):
+def full_doa_pipeline(json_path, signal, method='classicfft', max_tau=None, c=343, variable_param=None, return_error=True):
     """
     Loads configurations, simulates, calculates TDOAs and DOAs, with microphone noise optionally included from JSON.
 
@@ -386,8 +386,6 @@ def full_doa_pipeline(json_path, signal, mic_pairs=None, method='classicfft', ma
         Path to the JSON file containing simulation parameters.
     signal : str or np.ndarray
         Source signal or path to .wav file.
-    mic_pairs : list of tuple of int, optional
-        Microphone pairs for TDOA/DOA.
     method : str, optional
         GCC method ('classic', 'phat', etc.).
     max_tau : float, optional
@@ -413,7 +411,7 @@ def full_doa_pipeline(json_path, signal, mic_pairs=None, method='classicfft', ma
             signal_data = signal_data[:, 0]  # forzar mono
     else:
         signal_data = signal
-        fs_signal = None
+        #fs_signal = None
 
     # Leer JSON
     with open(json_path, 'r') as f:
@@ -452,7 +450,7 @@ def full_doa_pipeline(json_path, signal, mic_pairs=None, method='classicfft', ma
     mic_positions_list = []
     fs_list = []
     valid_param_values = []
-    ground_truth_angles = []
+    #ground_truth_angles = []
 
     # se itera sobre los n diccionarios en config list
     for cfg in config_list:
@@ -507,16 +505,16 @@ def full_doa_pipeline(json_path, signal, mic_pairs=None, method='classicfft', ma
             mic_positions_list.append(mic_pos)
             fs_list.append(fs)
             valid_param_values.append(cfg[varied_param])
-            ground_truth_angles.append(true_doa(mic_pos, source_pos))
+
 
         except Exception as e:
             print(f"Error with config {cfg}: {e}")
             continue
 
-
-    if mic_pairs is None:
-        n_mics = mic_pos.shape[1]
-        mic_pairs = [(0, i) for i in range(1, n_mics)]
+    true_angle = true_doa(mic_pos, source_pos)
+    
+    n_mics = mic_pos.shape[1]
+    mic_pairs = [(0, i) for i in range(1, n_mics)]
     
     # Calcular TDOAs y DOAs con cálculo automático de max_tau si no se pasa
     all_tdoas = batch_gcc_tdoas(
@@ -530,23 +528,10 @@ def full_doa_pipeline(json_path, signal, mic_pairs=None, method='classicfft', ma
     doa_results = batch_doas(all_tdoas, mic_positions_list, mic_pairs, c)
 
     if return_error:
-        doa_errors = []
-        for est, real in zip(doa_results, ground_truth_angles):
-            # si el resultado es una lista de valores (por ejemplo varios DOAs por sim)
-            if isinstance(est, (list, np.ndarray)) and len(est) > 0:
-                error = abs(est[0] - real) % 360
-                if error > 180: error = 360 - error
-                doa_errors.append(error)
-            elif isinstance(est, (int, float)):
-                error = abs(est - real) % 360
-                if error > 180: error = 360 - error
-                doa_errors.append(error)
-            else:
-                doa_errors.append(np.nan)
+        doa_errors = [abs(est - true_angle) for est in doa_results]
         return valid_param_values, doa_errors
     else:
         return valid_param_values, doa_results
-
 
 
 
@@ -593,10 +578,10 @@ def batch_mean_std(x_data, y_data, batch_size):
 
 #sim.expand_param(dicc_base, "rt60", 0.05, filename = "x")
 #sim.expand_param(dicc_base, "source_pos", [0.05,0,0], filename = "z", n=100)
-x, audio = gen.unit_impulse((0, 88200), 44100)
+#x, audio = gen.unit_impulse((0, 88200), 44100)
 
 
-x, y = full_doa_pipeline("variacion_mic_amount.json", audio, variable_param="mic_amount", method="classicfft")
+#x, y = full_doa_pipeline("variacion_mic_amount.json", audio, variable_param="mic_amount", method="classicfft")
 
 
 
