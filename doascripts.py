@@ -157,15 +157,16 @@ def gcc_tdoas(signals, fs, max_tau=None, method="phat", mic_pairs=None, c=343.0)
     """
     n_mics, n_samples = signals.shape
 
-    # Comparar todos contra el micrófono 0
-    if mic_pairs is None:
-        mic_pairs = [(0, i) for i in range(1, n_mics)]
 
     tdoas = []
 
     for i, j in mic_pairs:
+        if i >= n_mics or j >= n_mics:
+            continue  # Saltearse pares fuera de rango
+    
         sig1 = signals[i]
         sig2 = signals[j]
+
 
         SIG1 = np.fft.fft(sig1)
         SIG2 = np.fft.fft(sig2)
@@ -244,11 +245,12 @@ def doa(tdoa, mic_positions, mic_pairs=None, c=343, return_all=False):
     n_mics = mic_positions.shape[1]
 
     # 🔄 Usar micrófono 0 como referencia si no se especifican pares
+    
     if mic_pairs is None:
         mic_pairs = [(0, i) for i in range(1, n_mics)]
 
-    if len(tdoa) != len(mic_pairs):
-        raise ValueError("Number of TDOAs must match number of mic pairs.")
+    #if len(tdoa) != len(mic_pairs):
+        #raise ValueError("Number of TDOAs must match number of mic pairs.")
 
     doa_angles = []
 
@@ -267,32 +269,37 @@ def doa(tdoa, mic_positions, mic_pairs=None, c=343, return_all=False):
 def batch_gcc_tdoas(all_signals, fs_list, mic_positions_list=None, mic_pairs=None,
                     method='classicfft', max_tau=None, c=343):
     """
-    Computes TDOAs for a list of simulations, using mic 0 as reference if mic_pairs not given.
+    Computes Time Difference of Arrival (TDOA) estimates for a batch of simulated microphone signals.
+
+    For each simulation, estimates the TDOAs between microphone pairs using the Generalized Cross-Correlation (GCC) method.
+    If `max_tau` is not provided, it is automatically computed from the maximum microphone distance for each simulation.
+    If `mic_pairs` is not provided, uses (0, i) as default pairs (mic 0 with all others).
 
     Parameters
     ----------
     all_signals : list of np.ndarray
-        List of (n_mics, n_samples) arrays, one per simulation.
+        List of simulated microphone signals, one per simulation. Each array should be of shape (n_mics, n_samples).
     fs_list : list of int or float
-        Sampling frequencies, one per simulation.
+        Sampling frequencies for each simulation (must match length of `all_signals`).
     mic_positions_list : list of np.ndarray, optional
-        List of mic position arrays, needed to compute max_tau automatically if not given.
+        List of microphone position arrays (shape: 3 x n_mics). Required if `max_tau` is not provided.
     mic_pairs : list of tuple of int, optional
-        Microphone index pairs. If None, uses (0, i) for i=1..n_mics-1.
+        List of microphone index pairs to estimate TDOA from. If None, defaults to (0, i) for i = 1..n_mics-1.
     method : str, optional
-        GCC method. Default is 'classicfft'.
+        GCC method to use ('classicfft', 'phat', 'scot', etc.). Default is 'classicfft'.
     max_tau : float, optional
-        Maximum TDOA to consider (in seconds). If None, computed from mic geometry.
+        Maximum time delay to consider in seconds. If None, it is computed from the farthest mic pair in each simulation.
     c : float, optional
-        Speed of sound in m/s. Default is 343.
+        Speed of sound in m/s. Default is 343 m/s.
 
     Returns
     -------
-    list of list of float
-        List of TDOAs per simulation.
+    all_tdoas : list of list of float
+        A list containing the TDOA estimates for each simulation. Each sublist contains one TDOA per mic pair.
     """
     all_tdoas = []
 
+    # idx es el indice de la iteracion que enumerate causa, enumerate se usa pq itera sobre pares (signals, fs)
     for idx, (signals, fs) in enumerate(zip(all_signals, fs_list)):
         if max_tau is None:
             if mic_positions_list is None:
@@ -301,26 +308,36 @@ def batch_gcc_tdoas(all_signals, fs_list, mic_positions_list=None, mic_pairs=Non
             mic_pos = mic_positions_list[idx]
             n_mics = mic_pos.shape[1]
 
-            if mic_pairs is None:
-                mic_pairs_local = [(0, i) for i in range(1, n_mics)]
-            else:
-                mic_pairs_local = mic_pairs
 
-            max_dist = max(np.linalg.norm(mic_pos[:, i] - mic_pos[:, j]) for i, j in mic_pairs_local)
+            # Asegurar que los pares estén dentro de rango
+            try:
+                max_dist = max(
+                    np.linalg.norm(mic_pos[:, i] - mic_pos[:, j])
+                    for i, j in mic_pairs
+                    if i < n_mics and j < n_mics
+                )
+            except ValueError:
+                print(f"[Warning] No valid mic pairs for simulation {idx}, skipping.")
+                all_tdoas.append([])
+                continue
+
             max_tau_sim = max_dist / c
         else:
             max_tau_sim = max_tau
 
+        # Ejecutar estimación de TDOA por arrays de simulacion signals (n_mics, n_samples)
         tdoas = gcc_tdoas(
             signals,
             fs,
-            mic_pairs=mic_pairs if mic_pairs is not None else mic_pairs_local,
+            mic_pairs=mic_pairs,
             method=method,
             max_tau=max_tau_sim
         )
         all_tdoas.append(tdoas)
-
+        
+        # va guardando los varios tdoas por simulacion, es una lista de listas
     return all_tdoas
+
 
 
 def batch_doas(all_tdoas, mic_positions_list, mic_pairs=None, c=343):
@@ -471,7 +488,7 @@ def full_doa_pipeline(json_path, signal, mic_pairs=None, method='classicfft', ma
             if np.any(mic_pos[0] < 0) or np.any(mic_pos[0] > room_dim[0]) or \
                np.any(mic_pos[1] < 0) or np.any(mic_pos[1] > room_dim[1]) or \
                np.any(mic_pos[2] < 0) or np.any(mic_pos[2] > room_dim[2]):
-                print(f"Mic positions out of room bounds. Skipping configuration.")
+                print("Mic positions out of room bounds. Skipping configuration.")
                 continue
             # Construir el recinto
             
@@ -496,6 +513,11 @@ def full_doa_pipeline(json_path, signal, mic_pairs=None, method='classicfft', ma
             print(f"Error with config {cfg}: {e}")
             continue
 
+
+    if mic_pairs is None:
+        n_mics = mic_pos.shape[1]
+        mic_pairs = [(0, i) for i in range(1, n_mics)]
+    
     # Calcular TDOAs y DOAs con cálculo automático de max_tau si no se pasa
     all_tdoas = batch_gcc_tdoas(
         all_signals, fs_list,
@@ -568,22 +590,15 @@ def batch_mean_std(x_data, y_data, batch_size):
     return mean_x, mean_y, std_y
 
 
-"""
 
-dicc_base = {
-    "room_dim": [10, 10, 10], 
-    "rt60": 0.5,
-    "mic_amount": 4,
-    "mic_start": [1, 1, 1],
-    "mic_dist": 0.1,
-    "source_pos": [5, 5, 1],
-    "fs": 44100}
+#sim.expand_param(dicc_base, "rt60", 0.05, filename = "x")
+#sim.expand_param(dicc_base, "source_pos", [0.05,0,0], filename = "z", n=100)
+x, audio = gen.unit_impulse((0, 88200), 44100)
 
 
+x, y = full_doa_pipeline("variacion_mic_amount.json", audio, variable_param="mic_amount", method="classicfft")
 
-sim.expand_param(dicc_base, "rt60", 0.05, filename = "x")
-sim.expand_param(dicc_base, "source_pos", [0.05,0,0], filename = "z", n=100)
-"""
+
 
 """
 dicc_base = {
