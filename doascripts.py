@@ -388,7 +388,7 @@ def full_doa_pipeline(json_path, signal, mic_pairs=None, method='classicfft', ma
             signal_data = signal_data[:, 0]  # forzar mono
     else:
         signal_data = signal
-        #fs_signal = None
+        fs_signal = None
 
     # Leer JSON
     with open(json_path, 'r') as f:
@@ -505,6 +505,47 @@ def full_doa_pipeline(json_path, signal, mic_pairs=None, method='classicfft', ma
         return valid_param_values, doa_errors
     else:
         return valid_param_values, doa_results
+
+
+
+def batch_mean_std(x_data, y_data, batch_size):
+    """
+    Groups x_data and y_data into batches of size batch_size, then calculates the mean and 
+    standard deviation of y_data, as well as the mean of x_data to position the bars.
+
+    Parameters
+    ----------
+    x_data : list or np.ndarray
+        X-axis values corresponding to y_data.
+    y_data : list or np.ndarray
+        Y-axis values.
+    batch_size : int
+        Size of each batch.
+
+    Returns
+    -------
+    tuple of (list, list, list)
+        - mean_x: mean of x_data for each batch (bar position).
+        - mean_y: mean of y_data for each batch.
+        - std_y: standard deviation of y_data for each batch.
+    """
+    x_data = np.asarray(x_data)
+    y_data = np.asarray(y_data)
+
+    n = len(y_data)
+    mean_x = []
+    mean_y = []
+    std_y = []
+
+    for start_idx in range(0, n, batch_size):
+        x_batch = x_data[start_idx:start_idx + batch_size]
+        y_batch = y_data[start_idx:start_idx + batch_size]
+
+        mean_x.append(np.mean(x_batch))
+        mean_y.append(np.mean(y_batch))
+        std_y.append(np.std(y_batch))
+
+    return mean_x, mean_y, std_y
 
 
 """

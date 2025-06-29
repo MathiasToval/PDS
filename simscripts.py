@@ -83,11 +83,11 @@ def room_sim(room_dim, rt60, mic_pos, source_pos, signal, fs=44100):
 
 
 
-def expand_param(dicc_base, param_name, step_range, n=50, filename="config"):
+def expand_param(dicc_base, param_name, step, n=50, filename="config"):
     """
     Expands a scalar or 3D coordinate parameter in a base dictionary, generating 
-    a list of `n` values either from a step or from a specified range. Automatically 
-    saves the result as a JSON file.
+    a list of `n` values based on either a specified step or a range.
+    Automatically saves the result as a JSON file.
 
     Parameters
     ----------
@@ -95,13 +95,12 @@ def expand_param(dicc_base, param_name, step_range, n=50, filename="config"):
         Base dictionary with the original parameters.
     param_name : str
         Name of the parameter to expand.
-    step_range : float, list/tuple of 3 floats, or range:
-        Step or range:
-            - Scalar step: generates `val + k*step`.
-            - Tuple/list with 2 elements: interpreted as (start, stop) range.
-            - For 3D vector parameters:
-                - Step list of 3 elements: standard behavior.
-                - Or range of 3D vectors: ((x0,x1), (y0,y1), (z0,z1)), generates linspace in cada coord.
+    step : float or list/tuple of 3 elements or 2-element tuple/list or list of 3 pairs
+        Step size or range.
+        - If scalar and param scalar: step size.
+        - If 3-element list/tuple and param is 3D: step vector.
+        - If 2-element list/tuple: treated as [start, end] range for scalar.
+        - If list/tuple of 3 pairs: treated as [(x0,x1),(y0,y1),(z0,z1)] range for 3D.
     n : int, optional
         Number of values to generate. Default is 50.
     filename : str, optional
@@ -111,7 +110,17 @@ def expand_param(dicc_base, param_name, step_range, n=50, filename="config"):
     -------
     dict
         A copy of the dictionary with the expanded parameter.
+
+    Raises
+    ------
+    KeyError
+        If the parameter name does not exist in the dictionary.
+    ValueError
+        If step is not valid for the parameter type.
+    TypeError
+        If the parameter type is unsupported.
     """
+    
     dicc_new = copy.deepcopy(dicc_base)
 
     if param_name not in dicc_new:
@@ -119,41 +128,49 @@ def expand_param(dicc_base, param_name, step_range, n=50, filename="config"):
 
     val = dicc_new[param_name]
 
-    # Caso coordenadas 3D
-    if isinstance(val, (list, tuple)) and len(val) == 3:
-        if isinstance(step_range, (list, tuple)) and len(step_range) == 3 and all(isinstance(x, (int, float)) for x in step_range):
-            # Step clásico (deltas)
-            dicc_new[param_name] = [
-                [val[i] + k * step_range[i] for i in range(3)] for k in range(n)
-            ]
-        elif isinstance(step_range, (list, tuple)) and len(step_range) == 3 and all(
-            isinstance(x, (list, tuple)) and len(x) == 2 for x in step_range
-        ):
-            # Step como intervalo en cada coordenada: [(x0,x1), (y0,y1), (z0,z1)]
-            dicc_new[param_name] = [
-                [np.linspace(step_range[i][0], step_range[i][1], n)[k] for i in range(3)]
-                for k in range(n)
-            ]
-        else:
-            raise ValueError("For 3D parameters, step_range must be a list of 3 deltas or 3 (start, stop) tuples.")
-    
-    # Caso escalar
-    elif isinstance(val, (int, float)):
-        if isinstance(step_range, (int, float)):
-            dicc_new[param_name] = [val + k * step_range for k in range(n)]
-        elif isinstance(step_range, (list, tuple)) and len(step_range) == 2:
-            dicc_new[param_name] = list(np.linspace(step_range[0], step_range[1], n))
-        else:
-            raise ValueError("For scalar parameters, step_range must be a float or a 2-element range (start, stop).")
-    
-    else:
-        raise TypeError(f"Unsupported parameter type for '{param_name}': {type(val)}")
+    # Caso escalar rango: step es lista/tupla 2 elementos numéricos
+    if isinstance(val, (int, float)) and isinstance(step, (list, tuple)) and len(step) == 2 \
+       and all(isinstance(x, (int, float)) for x in step):
+        dicc_new[param_name] = list(np.linspace(step[0], step[1], n))
 
-    # Guardar como JSON
+    # Caso 3D rango: step es lista/tupla de 3 pares (start,end)
+    elif isinstance(val, (list, tuple)) and len(val) == 3 \
+         and isinstance(step, (list, tuple)) and len(step) == 3 \
+         and all(isinstance(p, (list, tuple)) and len(p) == 2 for p in step) \
+         and all(isinstance(x, (int,float)) and isinstance(y, (int,float)) for p in step for x,y in [p]):
+        # Generar lista con n puntos lineales entre start y end para cada dimensión
+        expanded_list = []
+        for k in range(n):
+            point = [
+                step[dim][0] + (step[dim][1] - step[dim][0]) * k / (n - 1) if n > 1 else step[dim][0]
+                for dim in range(3)
+            ]
+            expanded_list.append(point)
+        dicc_new[param_name] = expanded_list
+
+    else:
+        # Caso clásico paso
+        # 3D coordenada con paso
+        if isinstance(val, (list, tuple)) and len(val) == 3:
+            if not (isinstance(step, (list, tuple)) and len(step) == 3):
+                raise ValueError("For 3D vector parameters, step must also be a list or tuple of length 3.")
+            dicc_new[param_name] = [
+                [val[i] + k * step[i] for i in range(3)] for k in range(n)
+            ]
+        # Caso escalar con paso
+        elif isinstance(val, (int, float)):
+            if not isinstance(step, (int, float)):
+                raise ValueError("For scalar parameters, step must be a number (int or float).")
+            dicc_new[param_name] = [val + k * step for k in range(n)]
+        else:
+            raise TypeError(f"Unsupported parameter type for '{param_name}': {type(val)}")
+
+    # Guardar archivo JSON
     with open(f"{filename}.json", 'w') as f:
         json.dump(dicc_new, f, indent=4)
 
     return dicc_new
+
 
 
 def simulate_from_config(signal, config_file):
