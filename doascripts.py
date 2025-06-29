@@ -104,7 +104,7 @@ def gcc(sig1, sig2, fs, method='classicfft', norm=False):
 def true_doa(mic_pos, source_pos):
     """
     Computes the ground-truth Direction of Arrival (DOA) angle 
-    from the center of the microphone array to the source position.
+    from the first microphone to the source position.
 
     Parameters
     ----------
@@ -121,8 +121,8 @@ def true_doa(mic_pos, source_pos):
         from the positive x-axis towards the source direction.
         Range: [0, 360).
     """
-    mic_center = np.mean(mic_pos, axis=1)  # geometric center of array
-    src_vec = np.array(source_pos[:2]) - mic_center[:2]  # vector from center to source in XY
+    mic_origin = mic_pos[:, 0]  # usar primer micrófono como referencia
+    src_vec = np.array(source_pos[:2]) - mic_origin[:2]  # vector desde mic a fuente
 
     angle_rad = np.arctan2(src_vec[1], src_vec[0])  # atan2(y, x)
     angle_deg = np.degrees(angle_rad) % 360
@@ -130,97 +130,86 @@ def true_doa(mic_pos, source_pos):
     return angle_deg
 
 
-def gcc_tdoas(signals, fs, mic_pairs=None, method='classicfft', max_tau=None):
+
+def gcc_tdoas(signals, fs, max_tau=None, method="phat", mic_pairs=None, c=343.0):
     """
-    Estimate the time delays of arrival (TDOAs) between multiple pairs of signals 
-    using Generalized Cross Correlation (GCC) with various weighting methods.
+    Compute TDOAs between microphone 0 and all others using GCC.
 
     Parameters
     ----------
-    signals : ndarray
-        2D array with shape (n_mics, n_samples), containing one signal per microphone.
+    signals : np.ndarray
+        Array of shape (n_mics, n_samples), containing microphone signals.
     fs : int or float
         Sampling frequency in Hz.
-    mic_pairs : list of tuple of int, optional
-        List of microphone index pairs [(i, j), ...] for which to compute the TDOAs.
-        If None, all adjacent mic pairs are used: [(0,1), (1,2), ...].
-    method : str, optional
-        GCC weighting method. Options include 'phat', 'scot', 'roth', 'eckart', 'ml', and 'classic'.
     max_tau : float, optional
-        Maximum expected time delay in seconds. Limits the search range.
+        Maximum TDOA (in seconds) to consider. If None, uses full range.
+    method : str, optional
+        GCC method: "classicfft", "phat", "scot", "roth", "ml".
+    mic_pairs : list of tuple, optional
+        List of mic index pairs. If None, compares all to mic 0.
+    c : float, optional
+        Speed of sound (default: 343 m/s).
 
     Returns
     -------
     tdoas : list of float
-        Estimated TDOAs (in seconds) for each mic pair.
-
-    Raises
-    ------
-    ValueError
-        If an invalid method string is provided or signals shape is invalid.
+        Estimated TDOA values (in seconds) for each mic pair.
     """
     n_mics, n_samples = signals.shape
 
+    # Comparar todos contra el micrófono 0
     if mic_pairs is None:
-        mic_pairs = [(i, i+1) for i in range(n_mics - 1)]
+        mic_pairs = [(0, i) for i in range(1, n_mics)]
 
     tdoas = []
 
     for i, j in mic_pairs:
         sig1 = signals[i]
         sig2 = signals[j]
-        n = len(sig1) + len(sig2) - 1
 
-        if method == 'classictemp':
-            cc = correlate(sig1, sig2, mode='full', method="direct")
-            lags = np.arange(-len(sig2) + 1, len(sig1))
+        SIG1 = np.fft.fft(sig1)
+        SIG2 = np.fft.fft(sig2)
+        R = SIG1 * np.conj(SIG2)
+
+        if method == "phat":
+            R /= np.abs(R) + 1e-10
+        elif method == "scot":
+            R /= np.sqrt(np.abs(SIG1)**2 * np.abs(SIG2)**2 + 1e-10)
+        elif method == "roth":
+            R /= (np.abs(SIG2)**2 + 1e-10)
+        elif method == "ml":
+            Sxx = np.abs(SIG1)**2
+            Syy = np.abs(SIG2)**2
+            R /= (Sxx + Syy + 1e-10)
+        elif method == "classicfft":
+            pass
         else:
-            SIG1 = fft(sig1, n=n)
-            SIG2 = fft(sig2, n=n)
-            G = SIG1 * np.conj(SIG2)
+            raise ValueError(f"Método desconocido: {method}")
 
-            P1 = np.abs(SIG1) ** 2
-            P2 = np.abs(SIG2) ** 2
+        corr = np.fft.ifft(R).real
+        corr = np.fft.fftshift(corr)
 
-            if method == 'classicfft':
-                W = 1.0
-            elif method == 'phat':
-                W = 1 / (np.abs(G) + 1e-12)
-            elif method == 'scot':
-                W = 1 / (np.sqrt(P1 * P2) + 1e-12)
-            elif method == 'roth':
-                W = 1 / (P2 + 1e-12)
-            elif method == 'eckart':
-                W = np.abs(G) / (P2 + 1e-12) ** 2
-                W = W / (np.max(W) + 1e-12)
-            elif method == 'ml':
-                noise_power = np.mean(P2)
-                W = np.abs(G) / (P2 + noise_power + 1e-12)
-            else:
-                raise ValueError("Invalid method. Choose from 'classictemp', 'classicfft', 'phat', 'scot', 'roth', 'eckart', 'ml'.")
-
-            G_weighted = G * W
-            cc = np.real(ifft(G_weighted))
-            cc = np.fft.fftshift(cc)
-            lags = np.arange(len(cc)) - (len(cc) // 2)
-
-        t_lags = lags / fs
+        max_lag = n_samples // 2
+        lags = np.arange(-max_lag, max_lag)
 
         if max_tau is not None:
-            mask = np.abs(t_lags) <= max_tau
-            cc = cc[mask]
-            t_lags = t_lags[mask]
+            max_shift = int(fs * max_tau)
+            center = len(corr) // 2
+            corr = corr[center - max_shift : center + max_shift]
+            lags = lags[center - max_shift : center + max_shift]
 
-        tdoa = t_lags[np.argmax(cc)]
+        peak_index = np.argmax(corr)
+        tdoa = lags[peak_index] / fs
         tdoas.append(tdoa)
 
     return tdoas
 
 
+
 def doa(tdoa, mic_positions, mic_pairs=None, c=343, return_all=False):
     """
     Calculates Direction of Arrival (DOA) angles from Time Differences of Arrival (TDOA) 
-    using multiple microphone pairs.
+    using multiple microphone pairs (default: with respect to mic 0).
 
     Parameters
     ----------
@@ -230,7 +219,7 @@ def doa(tdoa, mic_positions, mic_pairs=None, c=343, return_all=False):
         Array of shape (3, n_mics), each column is [x, y, z] of one mic.
     mic_pairs : list of tuple of int, optional
         List of (i, j) mic index pairs corresponding to each specified tdoa.
-        If None, uses adjacent pairs.
+        If None, uses (0, i) for i in range(1, n_mics).
     c : float, optional
         Speed of sound in m/s. Default is 343.
     return_all : bool, optional
@@ -244,6 +233,7 @@ def doa(tdoa, mic_positions, mic_pairs=None, c=343, return_all=False):
     Notes
     -----
     Uses cos(theta) = tdoa * c / distance
+    Angle is always in [0, 180] due to acos. You may resolve ambiguity separately.
     """
     tdoa = np.asarray(tdoa)
     mic_positions = np.asarray(mic_positions)
@@ -253,18 +243,18 @@ def doa(tdoa, mic_positions, mic_pairs=None, c=343, return_all=False):
 
     n_mics = mic_positions.shape[1]
 
-# asume que los tdoa son de pares adyacentes
+    # 🔄 Usar micrófono 0 como referencia si no se especifican pares
     if mic_pairs is None:
-        mic_pairs = [(i, i + 1) for i in range(n_mics - 1)]
+        mic_pairs = [(0, i) for i in range(1, n_mics)]
 
     if len(tdoa) != len(mic_pairs):
         raise ValueError("Number of TDOAs must match number of mic pairs.")
 
     doa_angles = []
-    #zip recorre (itera) los valores de cada array
+
     for tau, (i, j) in zip(tdoa, mic_pairs):
-        d_vec = mic_positions[:, j] - mic_positions[:, i] #resta la posicion del mic j a la del i
-        d = np.linalg.norm(d_vec) #ese vector resta al sacarle el modulo es la distancia entre mics
+        d_vec = mic_positions[:, j] - mic_positions[:, i]
+        d = np.linalg.norm(d_vec)
         cos_theta = np.clip(tau * c / d, -1, 1)
         angle = np.degrees(np.arccos(cos_theta))
         doa_angles.append(angle)
@@ -274,9 +264,10 @@ def doa(tdoa, mic_positions, mic_pairs=None, c=343, return_all=False):
     return doa_angles if return_all else round(doa_angles.mean(), 2)
 
 
-def batch_gcc_tdoas(all_signals, fs_list, mic_positions_list=None, mic_pairs=None, method='classicfft', max_tau=None, c=343):
+def batch_gcc_tdoas(all_signals, fs_list, mic_positions_list=None, mic_pairs=None,
+                    method='classicfft', max_tau=None, c=343):
     """
-    Computes TDOAs for a list of simulations.
+    Computes TDOAs for a list of simulations, using mic 0 as reference if mic_pairs not given.
 
     Parameters
     ----------
@@ -287,11 +278,11 @@ def batch_gcc_tdoas(all_signals, fs_list, mic_positions_list=None, mic_pairs=Non
     mic_positions_list : list of np.ndarray, optional
         List of mic position arrays, needed to compute max_tau automatically if not given.
     mic_pairs : list of tuple of int, optional
-        Microphone index pairs. If None, uses adjacent pairs.
+        Microphone index pairs. If None, uses (0, i) for i=1..n_mics-1.
     method : str, optional
-        GCC method. Default is 'classic'.
+        GCC method. Default is 'classicfft'.
     max_tau : float, optional
-        Maximum TDOA to consider (in seconds). If None, will be calculated from mic_positions_list.
+        Maximum TDOA to consider (in seconds). If None, computed from mic geometry.
     c : float, optional
         Speed of sound in m/s. Default is 343.
 
@@ -301,23 +292,34 @@ def batch_gcc_tdoas(all_signals, fs_list, mic_positions_list=None, mic_pairs=Non
         List of TDOAs per simulation.
     """
     all_tdoas = []
+
     for idx, (signals, fs) in enumerate(zip(all_signals, fs_list)):
         if max_tau is None:
             if mic_positions_list is None:
                 raise ValueError("mic_positions_list is required to compute max_tau automatically")
+
             mic_pos = mic_positions_list[idx]
+            n_mics = mic_pos.shape[1]
+
             if mic_pairs is None:
-                n_mics = mic_pos.shape[1]
-                mic_pairs_local = [(i, i + 1) for i in range(n_mics - 1)]
+                mic_pairs_local = [(0, i) for i in range(1, n_mics)]
             else:
                 mic_pairs_local = mic_pairs
+
             max_dist = max(np.linalg.norm(mic_pos[:, i] - mic_pos[:, j]) for i, j in mic_pairs_local)
             max_tau_sim = max_dist / c
         else:
             max_tau_sim = max_tau
 
-        tdoas = gcc_tdoas(signals, fs, mic_pairs=mic_pairs, method=method, max_tau=max_tau_sim)
+        tdoas = gcc_tdoas(
+            signals,
+            fs,
+            mic_pairs=mic_pairs if mic_pairs is not None else mic_pairs_local,
+            method=method,
+            max_tau=max_tau_sim
+        )
         all_tdoas.append(tdoas)
+
     return all_tdoas
 
 
@@ -332,20 +334,28 @@ def batch_doas(all_tdoas, mic_positions_list, mic_pairs=None, c=343):
     mic_positions_list : list of np.ndarray
         Each element is a (3, n_mics) array of mic positions.
     mic_pairs : list of tuple, optional
-        Mic index pairs.
+        Mic index pairs. If None, uses (0, i) for i in 1..n_mics-1.
     c : float, optional
         Speed of sound.
 
     Returns
     -------
-    list of float or list of np.ndarray
-        DOA (degrees) per simulation, either average or all angles.
+    list of float
+        Average DOA (in degrees) per simulation.
     """
     doas_results = []
+
     for tdoas, mic_pos in zip(all_tdoas, mic_positions_list):
-        doa_value = doa(tdoas, mic_pos, mic_pairs=mic_pairs, c=c, return_all=False)
+        n_mics = mic_pos.shape[1]
+
+        # Usar micrófono 0 como referencia si no se especificaron pares
+        pairs = mic_pairs if mic_pairs is not None else [(0, i) for i in range(1, n_mics)]
+
+        doa_value = doa(tdoas, mic_pos, mic_pairs=pairs, c=c, return_all=False)
         doas_results.append(doa_value)
+
     return doas_results
+
 
 
 
