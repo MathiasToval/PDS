@@ -133,83 +133,78 @@ def true_doa(mic_pos, source_pos):
 
 
 
-def gcc_tdoas(signals, fs, max_tau=None, method="phat", mic_pairs=None, c=343.0):
+def gcc_tdoas(signals, fs, max_tau=None, mic_pairs=None, method="phat", c=343.0):
     """
-    Compute TDOAs between microphone 0 and all others using GCC.
+    Compute averaged TDOAs over sequential mic groups (1 vs others, 2 vs others, etc.)
 
     Parameters
     ----------
     signals : np.ndarray
-        Array of shape (n_mics, n_samples), containing microphone signals.
+        Shape (n_mics, n_samples), mic signals.
     fs : int or float
-        Sampling frequency in Hz.
+        Sampling rate.
     max_tau : float, optional
-        Maximum TDOA (in seconds) to consider. If None, uses full range.
+        Max delay to search for (in seconds).
     method : str, optional
-        GCC method: "classicfft", "phat", "scot", "roth", "ml".
-    mic_pairs : list of tuple, optional
-        List of mic index pairs. If None, compares all to mic 0.
+        GCC method to use.
     c : float, optional
-        Speed of sound (default: 343 m/s).
+        Speed of sound.
 
     Returns
     -------
-    tdoas : list of float
-        Estimated TDOA values (in seconds) for each mic pair.
+    tdoa_avgs : list of float
+        One average TDOA per "mic round" (mic 0 vs rest, mic 1 vs rest, etc.).
     """
     n_mics, n_samples = signals.shape
+    tdoa_avgs = []
 
+    for i in range(n_mics - 1):
+        tdoas_i = []
+        for j in range(i + 1, n_mics):
+            sig1 = signals[i]
+            sig2 = signals[j]
 
-    tdoas = []
-    tdoas_per_pair = []
+            SIG1 = np.fft.fft(sig1)
+            SIG2 = np.fft.fft(sig2)
+            R = SIG1 * np.conj(SIG2)
 
-    for i, j in mic_pairs:
-        if i >= n_mics or j >= n_mics:
-            continue  # Saltearse pares fuera de rango
-    
-        sig1 = signals[i]
-        sig2 = signals[j]
+            if method == "phat":
+                R /= np.abs(R) + 1e-10
+            elif method == "scot":
+                R /= np.sqrt(np.abs(SIG1)**2 * np.abs(SIG2)**2 + 1e-10)
+            elif method == "roth":
+                R /= (np.abs(SIG2)**2 + 1e-10)
+            elif method == "ml":
+                Sxx = np.abs(SIG1)**2
+                Syy = np.abs(SIG2)**2
+                R /= (Sxx + Syy + 1e-10)
+            elif method == "classicfft":
+                pass
+            else:
+                raise ValueError(f"Método desconocido: {method}")
 
+            corr = np.fft.ifft(R).real
+            corr = np.fft.fftshift(corr)
 
-        SIG1 = np.fft.fft(sig1)
-        SIG2 = np.fft.fft(sig2)
-        R = SIG1 * np.conj(SIG2)
+            max_lag = n_samples // 2
+            lags = np.arange(-max_lag, max_lag)
 
-        if method == "phat":
-            R /= np.abs(R) + 1e-10
-        elif method == "scot":
-            R /= np.sqrt(np.abs(SIG1)**2 * np.abs(SIG2)**2 + 1e-10)
-        elif method == "roth":
-            R /= (np.abs(SIG2)**2 + 1e-10)
-        elif method == "ml":
-            Sxx = np.abs(SIG1)**2
-            Syy = np.abs(SIG2)**2
-            R /= (Sxx + Syy + 1e-10)
-        elif method == "classicfft":
-            pass
-        else:
-            raise ValueError(f"Método desconocido: {method}")
+            if max_tau is not None:
+                max_shift = int(fs * max_tau)
+                center = len(corr) // 2
+                corr = corr[center - max_shift : center + max_shift]
+                lags = lags[center - max_shift : center + max_shift]
 
-        corr = np.fft.ifft(R).real
-        corr = np.fft.fftshift(corr)
+            peak_idx = np.argmax(corr)
+            tdoa = lags[peak_idx] / fs
+            tdoas_i.append(tdoa)
 
-        max_lag = n_samples // 2
-        lags = np.arange(-max_lag, max_lag)
+        # Promedio por ronda
+        if tdoas_i:
+            tdoa_avg = sum(tdoas_i) / len(tdoas_i)
+            tdoa_avgs.append(tdoa_avg)
 
-        if max_tau is not None:
-            max_shift = int(fs * max_tau)
-            center = len(corr) // 2
-            corr = corr[center - max_shift : center + max_shift]
-            lags = lags[center - max_shift : center + max_shift]
-
-        peak_index = np.argmax(corr)
-        tdoa = lags[peak_index] / fs
-        
-        tdoas.append(tdoa)
-        tdoa_pair = sum(tdoas)
-        tdoas_per_pair.append(tdoa_pair)
-
-    return tdoas_per_pair #lista de tdoas de los pares [0,i]
+    return tdoa_avgs
 
 
 """
@@ -354,7 +349,7 @@ def doa(tdoa, mic_positions, mic_pairs=None, c=343, return_all=False):
     doa_angles = []
 
     for tau, (i, j) in zip(tdoa, mic_pairs):
-        i = 0
+    
         d_vec = mic_positions[:, j] - mic_positions[:, i]
         d = np.linalg.norm(d_vec)
         cos_theta = np.clip(tau * c / d, -1, 1)
@@ -614,16 +609,17 @@ def full_doa_pipeline(json_path, signal, method='classicfft', max_tau=None, c=34
     true_angle = true_doa(mic_pos, source_pos)
     
     n_mics = mic_pos.shape[1]
-    mic_pairs = [(i-1, i) for i in range(1, n_mics)]
+    for j in range(0, n_mics):
+        mic_pairs = [(j, i) for i in range(1, n_mics)]
     
     # Calcular TDOAs y DOAs con cálculo automático de max_tau si no se pasa
-    all_tdoas = batch_gcc_tdoas(
-        all_signals, fs_list,
-        mic_positions_list=mic_positions_list,
-        mic_pairs=mic_pairs,
-        method=method,
-        max_tau=max_tau,
-        c=c
+        all_tdoas = batch_gcc_tdoas(
+            all_signals, fs_list,
+            mic_positions_list=mic_positions_list,
+            mic_pairs=mic_pairs,
+            method=method,
+            max_tau=max_tau,
+            c=c
     )
     doa_results = batch_doas(all_tdoas, mic_positions_list, mic_pairs, c)
 
