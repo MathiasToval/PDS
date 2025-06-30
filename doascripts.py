@@ -130,50 +130,8 @@ def true_doa(mic_pos, source_pos):
     return angle_deg
 
 
-def estimate_consistent_tdoas(signals, fs, max_tau=None):
-    """
-    Estimate consistent TDOAs from a set of microphone signals using spatial redundancy.
 
-    Parameters
-    ----------
-    signals : np.ndarray
-        Array of shape (n_mics, n_samples).
-    fs : int
-        Sampling frequency.
-    max_tau : float, optional
-        Maximum delay to consider in seconds.
 
-    Returns
-    -------
-    tdoa_vector : np.ndarray
-        Array of size (n_mics,) with estimated delays relative to the reference mic (mic 0).
-    """
-    n_mics = signals.shape[0]
-    pair_indices = list(combinations(range(n_mics), 2))
-    num_pairs = len(pair_indices)
-
-    # Step 1: Compute pairwise TDOAs
-    tdoa_pairs = []
-    A = np.zeros((num_pairs, n_mics))
-    b = np.zeros(num_pairs)
-
-    for idx, (i, j) in enumerate(pair_indices):
-        tau_ij = gcc_phat(signals[i], signals[j], fs, max_tau=max_tau)
-        A[idx, i] = -1
-        A[idx, j] = 1
-        b[idx] = tau_ij
-        tdoa_pairs.append(tau_ij)
-
-    # Step 2: Solve for relative delays (least squares)
-    # Fix reference: mic 0 has delay = 0 → eliminate 1st column
-    A_reduced = A[:, 1:]
-    tdoa_relative, _, _, _ = lstsq(A_reduced, b)
-
-    # Reconstruct full vector (insert 0 at beginning)
-    tdoa_vector = np.insert(tdoa_relative, 0, 0.0)
-
-    return tdoa_vector
-"""
 
 def gcc_tdoas(signals, fs, max_tau=None, method="phat", mic_pairs=None, c=343.0):
     """
@@ -203,6 +161,7 @@ def gcc_tdoas(signals, fs, max_tau=None, method="phat", mic_pairs=None, c=343.0)
 
 
     tdoas = []
+    tdoas_per_pair = []
 
     for i, j in mic_pairs:
         if i >= n_mics or j >= n_mics:
@@ -245,42 +204,51 @@ def gcc_tdoas(signals, fs, max_tau=None, method="phat", mic_pairs=None, c=343.0)
 
         peak_index = np.argmax(corr)
         tdoa = lags[peak_index] / fs
+        
         tdoas.append(tdoa)
+        tdoa_pair = sum(tdoas)
+        tdoas_per_pair.append(tdoa_pair)
 
-    return tdoas
+    return tdoas_per_pair #lista de tdoas de los pares [0,i]
+
+
 """
-def gcc_tdoas(signals, fs, max_tau=None, method="phat", c=343.0):
-    """
-    Compute TDOAs from a microphone array using GCC, and apply redundancy fusion 
-    to refine TDOA estimates w.r.t. mic 0 based on Springer (τ_ij = τ_ik + τ_kj).
+def gcc_tdoas(signals, fs, max_tau=None, method="phat", c=343.0, mic_pairs=None):
+    
+    Estimate TDOAs between mic 0 and all others using redundant GCC estimates.
+
+    Uses τ_0i = τ_0k + τ_ki to improve estimates, exploiting TDOA redundancy.
 
     Parameters
     ----------
     signals : np.ndarray
-        Array of shape (n_mics, n_samples), containing microphone signals.
+        Shape (n_mics, n_samples), the microphone signals.
     fs : int or float
-        Sampling frequency in Hz.
+        Sampling frequency.
     max_tau : float, optional
-        Maximum TDOA (in seconds) to consider. If None, uses full range.
+        Maximum allowed TDOA in seconds.
     method : str, optional
-        GCC method: "classicfft", "phat", "scot", "roth", "ml".
+        GCC method: 'classicfft', 'phat', etc.
     c : float, optional
-        Speed of sound (default: 343 m/s).
+        Speed of sound.
 
     Returns
     -------
-    tdoas_0i : list of float
-        Estimated TDOA values (in seconds) from mic 0 to mic i, for i=1..N-1.
-    """
+    tdoas : list of float
+        Estimated TDOAs with respect to mic 0 (τ_01, τ_02, ..., τ_0N).
+    
     n_mics, n_samples = signals.shape
 
-    # Calcular TODAS las combinaciones posibles (i,j)
-    all_pairs = [(i, j) for i in range(n_mics) for j in range(i + 1, n_mics)]
-    raw_tdoas = {}
+    for i, j in mic_pairs:
+        if i >= n_mics or j >= n_mics:
+            continue  # Saltearse pares fuera de rango
+
+    # Estimación por GCC de todos los pares
+    all_pairs = [(i, j) for i in range(n_mics) for j in range(i+1, n_mics)]
+    tdoa_dict = {}
 
     for i, j in all_pairs:
-        sig1 = signals[i]
-        sig2 = signals[j]
+        sig1, sig2 = signals[i], signals[j]
 
         SIG1 = np.fft.fft(sig1)
         SIG2 = np.fft.fft(sig2)
@@ -296,10 +264,6 @@ def gcc_tdoas(signals, fs, max_tau=None, method="phat", c=343.0):
             Sxx = np.abs(SIG1)**2
             Syy = np.abs(SIG2)**2
             R /= (Sxx + Syy + 1e-10)
-        elif method == "classicfft":
-            pass
-        else:
-            raise ValueError(f"Método desconocido: {method}")
 
         corr = np.fft.ifft(R).real
         corr = np.fft.fftshift(corr)
@@ -313,33 +277,34 @@ def gcc_tdoas(signals, fs, max_tau=None, method="phat", c=343.0):
             corr = corr[center - max_shift : center + max_shift]
             lags = lags[center - max_shift : center + max_shift]
 
-        peak_index = np.argmax(corr)
-        tdoa = lags[peak_index] / fs
-        raw_tdoas[(i, j)] = tdoa
-        raw_tdoas[(j, i)] = -tdoa  # simetría
+        peak_idx = np.argmax(corr)
+        tdoa = lags[peak_idx] / fs
+        tdoa_dict[(i, j)] = tdoa
+        tdoa_dict[(j, i)] = -tdoa
 
-    # Fusión de TDOAs con referencia a mic 0
+    # Reconstrucción redundante: estimar τ_0i a partir de todos los caminos posibles
     tdoas_0i = []
     for i in range(1, n_mics):
         estimates = []
-        if (0, i) in raw_tdoas:
-            estimates.append(raw_tdoas[(0, i)])
 
-        # Buscar caminos alternativos via k: τ_0i = τ_0k + τ_ki
+        # estimación directa si existe
+        if (0, i) in tdoa_dict:
+            estimates.append(tdoa_dict[(0, i)])
+
+        # caminos indirectos: τ_0i = τ_0k + τ_ki
         for k in range(1, n_mics):
             if k == i:
                 continue
-            if (0, k) in raw_tdoas and (k, i) in raw_tdoas:
-                alt_est = raw_tdoas[(0, k)] + raw_tdoas[(k, i)]
-                estimates.append(alt_est)
+            if (0, k) in tdoa_dict and (k, i) in tdoa_dict:
+                estimates.append(tdoa_dict[(0, k)] + tdoa_dict[(k, i)])
 
         if estimates:
-            tdoas_0i.append(np.mean(estimates))  # fusión por promedio
+            tdoas_0i.append(np.mean(estimates))  # combinación redundante
         else:
             tdoas_0i.append(0.0)  # no hay estimación posible
 
     return tdoas_0i
-
+"""
 
 def doa(tdoa, mic_positions, mic_pairs=None, c=343, return_all=False):
     """
@@ -389,6 +354,7 @@ def doa(tdoa, mic_positions, mic_pairs=None, c=343, return_all=False):
     doa_angles = []
 
     for tau, (i, j) in zip(tdoa, mic_pairs):
+        i = 0
         d_vec = mic_positions[:, j] - mic_positions[:, i]
         d = np.linalg.norm(d_vec)
         cos_theta = np.clip(tau * c / d, -1, 1)
@@ -648,7 +614,7 @@ def full_doa_pipeline(json_path, signal, method='classicfft', max_tau=None, c=34
     true_angle = true_doa(mic_pos, source_pos)
     
     n_mics = mic_pos.shape[1]
-    mic_pairs = [(0, i) for i in range(1, n_mics)]
+    mic_pairs = [(i-1, i) for i in range(1, n_mics)]
     
     # Calcular TDOAs y DOAs con cálculo automático de max_tau si no se pasa
     all_tdoas = batch_gcc_tdoas(
@@ -716,10 +682,10 @@ def batch_mean_std(x_data, y_data, batch_size):
 
 #sim.expand_param(dicc_base, "rt60", 0.05, filename = "x")
 #sim.expand_param(dicc_base, "source_pos", [0.05,0,0], filename = "z", n=100)
-#x, audio = gen.unit_impulse((0, 88200), 44100)
+x, audio = gen.unit_impulse((0, 88200), 44100)
 
 
-#x, y = full_doa_pipeline("variacion_mic_amount.json", audio, variable_param="mic_amount", method="classicfft", return_error=False)
+x, y = full_doa_pipeline("variacion_mic_amount.json", audio, variable_param="mic_amount", method="classicfft", return_error=False)
 
 
 
